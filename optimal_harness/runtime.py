@@ -216,6 +216,14 @@ async def run_task(engine, task):
         broker, evidence, handoff, brief = engine._prepare(root, task)
         manifest['evidence'], manifest['handoff'] = evidence, handoff
         trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
+        if review is not None:
+            # Hash complete source bytes, before prompt excerpts are shortened.
+            inputs = set(task['brief']['permitted_reads'])
+            input_hash = hashlib.sha256(canonical({
+                path: hashlib.sha256(confined(root, path).read_bytes()).hexdigest()
+                if confined(root, path).is_file() else None for path in sorted(inputs)
+            }).encode()).hexdigest()
+            review.restore(store.load_review_progress(task, input_hash))
         if qa is not None:
             # Hash input bytes without exposing command-only artifacts to the model.
             inputs = (set(task['brief']['permitted_reads']) | set(conf.get('command_only', [])) |
@@ -439,7 +447,9 @@ async def run_task(engine, task):
                     last = str(exc)
                     store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
                     review.reject(last)
+                    store.save_review_progress(task, input_hash, review.progress())
                     continue
+                store.save_review_progress(task, input_hash, review.progress())
                 last = canonical({'accepted_sections': list(review.sections),
                                   'accepted_this_write': [section] if section != 'verdict' else [],
                                   'missing_sections': review.missing})

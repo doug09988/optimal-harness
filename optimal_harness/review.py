@@ -63,6 +63,14 @@ class DrivenReview:
         self.feedback = ''
         self.verdict = None
 
+    def progress(self):
+        return {key: getattr(self, key) for key in ('sections', 'errors', 'feedback')}
+
+    def restore(self, state):
+        if state is not None:
+            for key in ('sections', 'errors', 'feedback'):
+                setattr(self, key, state[key])
+
     @property
     def missing(self):
         return [key for key in SECTIONS if key not in self.sections]
@@ -111,7 +119,9 @@ class DrivenReview:
     def prompt(self, sources):
         section = self.current
         context = ('REVIEW of ' + repr(self.prior_stage) + '\nARTIFACTS AND SUPPORTING INPUTS:\n' +
-                   canonical(sources))
+                   canonical({path: text if len(text) <= 4000 else
+                              text[:4000] + '\n[truncated — full text in ' + path + ']'
+                              for path, text in sources.items()}))
         if section == 'verdict':
             context += '\nACCEPTED SECTIONS (context only):\n' + canonical(self.sections)
             contract = ('Give the review verdict. The first line must be exactly APPROVE or REQUEST_CHANGES. '

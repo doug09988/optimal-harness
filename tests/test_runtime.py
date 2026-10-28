@@ -372,6 +372,74 @@ class RuntimeTests(unittest.TestCase):
                 ModelError('model_request_killed_on_deadline'), result]):
             asyncio.run(run())
 
+    def review_attempts(self, change_input=False):
+        from optimal_harness.engine import make_brief
+        from unittest.mock import patch
+        self.submit()
+        self.store.finish(self.store.claim('setup', 60), 'SUCCEEDED')
+        (self.root/'wordfreq.py').write_text('# artifact under review\n')
+        self.store.enqueue('wordcounter', 'REVIEW', 0,
+                           make_brief('REVIEW', self.store.project('wordcounter')['plan'], source_stage='CODER'))
+        calls = []
+        class Queue(FakeQueue):
+            async def request(q, prompt, cap, timeout):
+                calls.append((str(prompt), cap))
+                item = q.actions.popleft()
+                if isinstance(item, Exception):
+                    raise item
+                return Completion(item, 100, 80, 30)
+        with patch.object(self.engine, '_advance'):
+            self.engine.queue = Queue(['CODER', 'ATTEMPTED missing input',
+                                       RuntimeError('model_request_killed_on_deadline')])
+            asyncio.run(self.engine.run_task(self.store.claim('first', 60)))
+            self.assertEqual(self.store.tasks('wordcounter')[-1]['status'], 'QUEUED')
+            if change_input:
+                (self.root/'wordfreq.py').write_text('# changed artifact under review\n')
+            self.engine.store = Store(self.base/'board.db')
+            replies = ['CODER', 'ATTEMPTED changed input'] if change_input else []
+            self.engine.queue = Queue(replies + ['Observed facts', '', 'APPROVE'])
+            asyncio.run(self.engine.run_task(self.store.claim('second', 60)))
+            task = self.store.tasks('wordcounter')[-1]
+            self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        return calls
+
+    def test_driven_review_resumes_after_two_of_four_sections(self):
+        calls = self.review_attempts()
+        self.assertEqual([cap for _, cap in calls], [2048] * 5 + [128])
+        self.assertIn('SECTION: observations', calls[3][0])
+        self.assertIn('SECTION: unresolved', calls[4][0])
+        self.assertIn('ATTEMPTED missing input', calls[5][0])
+        report = json.loads((self.root/'artifacts/review.json').read_text())
+        self.assertEqual(report, {'reviewed_stage': 'CODER',
+                                 'counterexamples': ['ATTEMPTED missing input'],
+                                 'observations': ['Observed facts'], 'unresolved': [], 'verdict': 'APPROVE'})
+
+    def test_driven_review_changed_artifact_discards_progress(self):
+        calls = self.review_attempts(change_input=True)
+        self.assertEqual([cap for _, cap in calls], [2048] * 7 + [128])
+        self.assertIn('SECTION: reviewed_stage', calls[3][0])
+        self.assertIn('SECTION: counterexamples', calls[4][0])
+        self.assertNotIn('ATTEMPTED missing input', calls[-1][0])
+
+    def test_review_excerpts_are_bounded_in_sections_and_verdict(self):
+        from optimal_harness.review import DrivenReview
+        from optimal_harness.store import canonical
+        review = DrivenReview('QA')
+        text = 'e' * 10000
+        sources = {'reports/qa.json': text, 'short.txt': 's' * 4000}
+        expected = text[:4000] + '\n[truncated — full text in reports/qa.json]'
+        for reply in ('QA', 'ATTEMPTED missing input', 'Observed facts', ''):
+            prompt = review.prompt(review.section_sources(sources, ['reports/qa.json']))
+            self.assertIn(canonical(expected), prompt)
+            self.assertNotIn('e' * 4001, prompt)
+            review.accept(reply)
+        prompt = review.prompt(sources)
+        self.assertIn(canonical(expected), prompt)
+        self.assertNotIn('e' * 4001, prompt)
+        self.assertIn(canonical('s' * 4000), prompt)
+        self.assertNotIn('full text in short.txt', prompt)
+        self.assertEqual(sources['reports/qa.json'], text)
+
     def test_review_source_spans(self):
         from optimal_harness.review import DrivenReview
         review = DrivenReview('INTAKE')

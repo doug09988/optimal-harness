@@ -1,7 +1,12 @@
 """Attempt-local, server-usage ledger; conservative reserve before dispatch."""
 from __future__ import annotations
+import math
 import time
 
+# Call timeout = min(remaining stage seconds, max(max_call_seconds,
+# ceil(prompt UTF-8 bytes / 150) + ceil(returned completion cap / 8) + 30)).
+# Conservative bad-window prefill/decode rates (150 and 8 tokens/s), with
+# bytes bounding prefill tokens and a 30 s margin; max_call_seconds is a floor.
 DEFAULT_BUDGET = {'max_calls': 60, 'max_fresh_tokens': 200000,
                   'max_seconds': 1800, 'max_prompt_bytes': 131072,
                   'max_command_seconds': 60, 'max_observation_bytes': 32768,
@@ -34,11 +39,15 @@ class Ledger:
             raise BudgetExceeded('circuit_breaker:context_bytes')
         # UTF-8 bytes conservatively bound text tokens; reserve template overhead.
         # Cache cannot be assumed before the server reports it.
-        prompt_reserve = len((static_prefix + prompt).encode()) + 512
+        prompt_bytes = len((static_prefix + prompt).encode())
+        prompt_reserve = prompt_bytes + 512
         cap = int(self.budget['max_fresh_tokens'] - self.fresh - prompt_reserve)
         if cap < 1:
             raise BudgetExceeded('circuit_breaker:fresh_tokens_reserve')
-        return min(cap, int(self.budget['max_completion_tokens'])), min(self.budget['max_call_seconds'], self.budget['max_seconds']-self.seconds)
+        cap = min(cap, int(self.budget['max_completion_tokens']))
+        timeout = max(self.budget['max_call_seconds'],
+                      math.ceil(prompt_bytes / 150) + math.ceil(cap / 8) + 30)
+        return cap, min(timeout, self.budget['max_seconds'] - self.seconds)
 
     def charge(self, result):
         values = (result.prompt_tokens, result.cached_tokens, result.completion_tokens)

@@ -54,6 +54,11 @@ class Store:
                     path TEXT NOT NULL, sha256 TEXT NOT NULL, archive TEXT NOT NULL,
                     PRIMARY KEY(task,generation,path)
                 );
+                CREATE TABLE IF NOT EXISTS review_progress (
+                    project TEXT NOT NULL, task TEXT NOT NULL, reviewed_stage TEXT NOT NULL,
+                    input_hash TEXT NOT NULL, body TEXT NOT NULL,
+                    PRIMARY KEY(project,task,reviewed_stage)
+                );
                 CREATE TABLE IF NOT EXISTS qa_progress (
                     project TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL,
                     body TEXT NOT NULL, PRIMARY KEY(project,stage)
@@ -218,6 +223,23 @@ class Store:
                   (task['id'], task['generation'], task['project_id'], path, sha256, archive))
         self._event(c, 'artifact_checkpoint', {'task': task['id'], 'generation': task['generation'],
                     'project': task['project_id'], 'path': path, 'sha256': sha256, 'archive': archive})
+
+    def load_review_progress(self, task, input_hash):
+        key = (task['project_id'], task['id'], task['brief']['prior_stage'])
+        with self.transaction() as c:
+            self._assert(c, task)
+            row = c.execute('SELECT * FROM review_progress WHERE project=? AND task=? AND reviewed_stage=?',
+                            key).fetchone()
+            if row and row['input_hash'] == input_hash:
+                return json.loads(row['body'])
+            c.execute('DELETE FROM review_progress WHERE project=? AND task=? AND reviewed_stage=?', key)
+            return None
+
+    def save_review_progress(self, task, input_hash, body):
+        def effect(c):
+            c.execute('INSERT OR REPLACE INTO review_progress VALUES(?,?,?,?,?)',
+                      (task['project_id'], task['id'], task['brief']['prior_stage'], input_hash, canonical(body)))
+        self.commit(task, effect)
 
     def load_qa_progress(self, task, input_hash):
         with self.transaction() as c:

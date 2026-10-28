@@ -172,6 +172,21 @@ class Adversarial(unittest.TestCase):
             l2.charge(Completion('', 1000, 0, 1))
         self.assertEqual(l2.fresh, 1001)
 
+    def test_size_aware_call_deadline_floor_scaled_and_remaining_wall(self):
+        clock = [0]
+        ledger = Ledger({'max_completion_tokens': 128}, clock=lambda: clock[0])
+        self.assertEqual(ledger.reserve('small'), (128, 180))
+        ledger = Ledger({'max_completion_tokens': 2048}, clock=lambda: clock[0])
+        # 30,000 UTF-8 bytes including the static prefix: 200 + 256 + 30.
+        self.assertEqual(ledger.reserve('x' * 29700, 'α' * 150), (2048, 486))
+        clock[0] = 1700.5
+        self.assertEqual(ledger.reserve('x' * 30000), (2048, 99.5))
+
+    def test_call_deadline_uses_returned_token_budget_cap(self):
+        ledger = Ledger({'max_fresh_tokens': 30529}, clock=lambda: 0)
+        # The fresh-token reserve leaves only 17 completion tokens.
+        self.assertEqual(ledger.reserve('x' * 30000), (17, 233))
+
     def test_wall_budget_exact_boundary(self):
         clock = [0]
         l = Ledger({'max_seconds': 10}, clock=lambda: clock[0])
