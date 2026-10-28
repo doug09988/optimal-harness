@@ -62,16 +62,54 @@ class FixerTests(unittest.TestCase):
         self.assertEqual([cap for _, cap in self.calls], [4096, 4096])
         self.assertEqual(self.engine.integrity_errors('wordcounter', self.root), [])
 
-    def test_unfixed_continues_then_retries_only_unfixed(self):
+    def evidence(self, task):
+        path = self.root / f"vault/runs/{task['id']}/a1/evidence.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_unfixed_continues_with_partial_success(self):
         self.setup_task()
-        task = self.attempt(['', '\x00', '# fixed second'])
-        self.assertIn('fixer_action_format_exhausted:unfixed', task['failure'])
-        self.assertTrue(model_side_failure(task['failure']))
-        self.assertEqual(task['status'], 'QUEUED')
-        self.assertEqual((self.root/'test_unit.py').read_text(), '# fixed second')
-        task = self.attempt(['# fixed first'])
+        task = self.attempt(['', '\x00', '```python\nbad\n```', '# fixed second'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'wordfreq.py').read_text(), 'old implementation\n')
+        self.assertEqual((self.root/'test_unit.py').read_bytes(), b'# fixed second')
+        handoff = json.loads((self.root / f"vault/runs/{task['id']}/a1/handoff.json").read_text())
+        self.assertEqual(len(handoff['open_discrepancies']), 1)
+        self.assertIn('Item 0 (wordfreq.py)', handoff['open_discrepancies'][0])
+        self.assertIn('code fence envelope', handoff['open_discrepancies'][0])
         self.assertEqual(len(self.calls), 4)
+
+    def test_empty_twice_then_nudge_recovers(self):
+        self.setup_task()
+        task = self.attempt(['', '  ', '# recovered', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        for prompt, cap in self.calls[1:3]:
+            self.assertIn('empty file content', prompt)
+            self.assertIn('Reply with ONLY the complete corrected file content, no commentary, no code fences.', prompt)
+            self.assertEqual(cap, 4096)
+        self.assertEqual((self.root/'wordfreq.py').read_bytes(), b'# recovered')
+        with self.store.transaction() as c:
+            usage = c.execute("SELECT count(*) FROM events WHERE kind='model_call_finished'").fetchone()[0]
+        self.assertEqual(usage, 4)
+
+    def test_all_unusable_fail_with_reasons(self):
+        self.setup_task()
+        task = self.attempt([''] * 3 + ['\x00'] * 3)
+        self.assertEqual(task['status'], 'QUEUED')
+        self.assertTrue(model_side_failure(task['failure']))
+        reasons = json.loads(task['failure'].split('; ', 1)[1])
+        self.assertEqual(reasons, {'0': 'empty file content', '1': 'file content contains NUL'})
+        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(len([e for e in self.evidence(task) if 'raw_response' in e]), 6)
+
+    def test_raw_response_evidence_is_bounded(self):
+        self.setup_task()
+        body = '# snow ☃\n' * 1000
+        task = self.attempt(['', body, '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        records = [e for e in self.evidence(task) if 'raw_response' in e]
+        self.assertEqual([e['call'] for e in records], [1, 2, 3])
+        self.assertEqual([e['raw_response'] for e in records],
+                         ['', body[:4000] + '\n[truncated]', '# unit'])
 
     def test_resume_after_first_item(self):
         self.setup_task()

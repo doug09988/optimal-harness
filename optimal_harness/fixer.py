@@ -32,7 +32,7 @@ def structured_fixes(value):
 
 class DrivenFixer:
     async def run(self, engine, task, plan, root, conf, ledger, manifest, broker,
-                  write, chunks, checkpoints):
+                  write, chunks, checkpoints, trusted_write, evidence):
         store = engine.store
         sources = {'cycle_notes': task['brief'].get('notes_verbatim', '')}
         items = structured_fixes(task['brief'])
@@ -124,6 +124,12 @@ class DrivenFixer:
                         'prompt_tokens': result.prompt_tokens, 'cached_tokens': result.cached_tokens,
                         'completion_tokens': result.completion_tokens, 'fresh_tokens': result.fresh_tokens,
                         'raw_action': result.text})
+            raw = result.text[:4000]
+            if len(result.text) > 4000:
+                raw += '\n[truncated]'
+            trusted_write(evidence, confined(root, evidence).read_bytes() +
+                          (canonical({'event': 'model_call_finished', 'call': ledger.calls + 1,
+                                      'raw_response': raw}) + '\n').encode())
             metered = store.meter(task, result.prompt_tokens, result.cached_tokens, result.completion_tokens)
             ledger.charge(result)
             if metered['budget_exceeded']:
@@ -168,22 +174,31 @@ class DrivenFixer:
             if key in state['applied']:
                 continue
             reason = ''
-            for _ in range(2):
+            for attempt in range(3):
                 full = confined(root, path)
                 current = full.read_bytes().decode('utf-8') if full.is_file() else ''
                 body = await ask(budget(lambda f, e, a: FixerPrompt('FINDING:\n' + e['finding'] + '\nFILE: ' + path +
                     '\nCURRENT CONTENT:\n' + current +
                     '\nReply with the complete corrected content of this file. No JSON, no envelope.' +
-                    ('\nVALIDATOR REASON: ' + reason if reason else '')), evidence={'finding': change}, target=(path, current)), 4096)
+                    ('\nVALIDATOR REASON: ' + reason +
+                     '\nYour previous reply was unusable: ' + reason +
+                     '. Reply with ONLY the complete corrected file content, no commentary, no code fences.'
+                     if reason else '')), evidence={'finding': change}, target=(path, current)), 4096)
+                content_valid = False
                 try:
-                    if not body.strip() or '\x00' in body or body.lstrip().startswith('```'):
-                        raise PolicyError('file content must be nonempty text without NUL or envelope')
+                    if not body.strip():
+                        raise PolicyError('empty file content')
+                    if '\x00' in body:
+                        raise PolicyError('file content contains NUL')
+                    if body.lstrip().startswith('```'):
+                        raise PolicyError('file content contains a code fence envelope')
                     try:
                         envelope = json.loads(body)
                     except ValueError:
                         envelope = None
                     if isinstance(envelope, dict) and 'action' in envelope:
                         raise PolicyError('reply must be file content, no action envelope')
+                    content_valid = True
                     parts = chunks(body)
                     def applied(c):
                         state['applied'][key] = True
@@ -200,13 +215,18 @@ class DrivenFixer:
                 except (PolicyError, OSError, ValueError) as exc:
                     reason = str(exc)
                     store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': reason})
-            else:
+                    if content_valid and attempt >= 1:
+                        break
+            if key not in state['applied']:
                 state['unfixed'][key] = reason
                 save()
-        if state['unfixed']:
+        if not state['applied']:
             raise RuntimeError('fixer_action_format_exhausted:unfixed; ' + canonical(state['unfixed']))
         # Checkpoint current bytes on resumed attempts for normal readiness validation.
-        for path in targets:
-            write(path)
-        return {'action': 'finish', 'summary': 'Applied requested fixes: ' + canonical(state['items']),
-                'open_discrepancies': []}
+        for index, (path, _) in enumerate(state['items']):
+            if str(index) in state['applied']:
+                write(path)
+        fixed = [item for index, item in enumerate(state['items']) if str(index) in state['applied']]
+        return {'action': 'finish', 'summary': 'Applied requested fixes: ' + canonical(fixed),
+                'open_discrepancies': [f'Item {key} ({state["items"][int(key)][0]}): {reason}'
+                                       for key, reason in state['unfixed'].items()]}

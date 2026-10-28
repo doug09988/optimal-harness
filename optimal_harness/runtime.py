@@ -277,7 +277,7 @@ async def run_task(engine, task):
                             'op': 'command', 'path_or_name': name, 'receipt': last})
             if fixer is not None:
                 action = await fixer.run(engine, task, plan, root, conf, ledger, manifest,
-                                         broker, write_checkpoint, storage_chunks, checkpoints)
+                                         broker, write_checkpoint, storage_chunks, checkpoints, trusted_write, evidence)
             elif integrator is not None:
                 action = await integrator.run(engine, task, plan, root, conf, ledger, manifest,
                                               broker, write_checkpoint, storage_chunks, execute_command,
