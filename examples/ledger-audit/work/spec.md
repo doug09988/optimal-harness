@@ -24,6 +24,8 @@ Output totals: `grand_total_cents` is the sum of `amount_cents` over all transac
 
 Output order: Category keys inside `totals` and `counts` appear in ascending Unicode code-point order.
 
+Ties: Two categories may have equal totals; no tie-breaking applies because each category is reported independently.
+
 Empty input: The empty input array `[]` is valid and produces `totals` `{}`, `counts` `{}`, `grand_total_cents` 0, and `transaction_count` 0.
 
 Fees: Apply the processing-fee schedule in Appendix B of this specification to each category total before writing the output.
