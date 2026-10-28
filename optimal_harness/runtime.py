@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from pathlib import Path
 from .ledger import Ledger
 from .model import SYSTEM_PREFIX, parse_action, ModelError
@@ -87,6 +88,10 @@ async def run_task(engine, task):
     plan, root = project['plan'], Path(project['root'])
     conf = plan['stages'][task['stage']]
     ledger = Ledger(conf.get('budget'))
+    # The stage envelope is shared by every generation, including lease reclaims.
+    prior_usage = store.stage_usage(task)
+    ledger.calls, ledger.fresh, ledger.cached = (prior_usage[k] for k in ('calls', 'fresh', 'cached'))
+    ledger.started -= max(0, time.time() - prior_usage['started'])
     checkpoints = {}
     monitor = asyncio.create_task(engine._heartbeat(task))
     broker = handoff = evidence = None
@@ -130,7 +135,7 @@ async def run_task(engine, task):
                       'First write with more=true, then append with more=true; final append more=false. '
                       'Rejected actions wrote no bytes; retry only the rejected chunk.')
     manifest = {'task': task['id'], 'generation': task['generation'], 'role': task['stage'],
-                'budget': ledger.budget, 'static_prefix_sha256': hashlib.sha256(SYSTEM_PREFIX.encode()).hexdigest(),
+                'budget': ledger.budget, 'budget_scope': 'shared_stage_task_all_generations', 'static_prefix_sha256': hashlib.sha256(SYSTEM_PREFIX.encode()).hexdigest(),
                 'charter_sha256': plan['charter_hashes'][f"vault/charters/{task['stage'].lower()}.md"],
                 'cache_configuration': getattr(engine.queue, 'cache_config', {'max_bytes': 268435456, 'verified': False}),
                 'status': 'running'}
@@ -209,7 +214,7 @@ async def run_task(engine, task):
                 next_step = 'Emit action=finish with summary and open_discrepancies; runtime generates ' + handoff
             else:
                 next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
-            if ledger.calls == 0 and plan['spec'] in task['brief']['permitted_reads']:
+            if manifest.get('calls_dispatched', 0) == 0 and plan['spec'] in task['brief']['permitted_reads']:
                 next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
             if task['stage'] == 'REVIEW' and missing:
                 next_step = ('Write several or all remaining review sections to ' + missing[0] + ', data={' +
@@ -217,7 +222,7 @@ async def run_task(engine, task):
             if finish_feedback:
                 next_step = finish_feedback
             prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
-            prompt += '\nCompleted model calls in this attempt: ' + str(ledger.calls)
+            prompt += '\nCompleted model calls across this stage task: ' + str(ledger.calls)
             if last.startswith('{') and '"content":' in last:
                 prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
             if task['stage'] == 'REVIEW':
@@ -455,7 +460,7 @@ async def run_task(engine, task):
                     if intake_target:
                         from .verifier import Verifier
                         target = confined(root, path)
-                        if (target.is_file() and target.read_bytes() == data.encode('utf-8') and
+                        if (path in checkpoints and target.is_file() and target.read_bytes() == data.encode('utf-8') and
                                 not Verifier(root).intake(path, plan['spec'])):
                             raise PolicyError(INTAKE_COMPLETE)
                     count = write_checkpoint(action['path'], data, op == 'append')
@@ -522,10 +527,19 @@ async def run_task(engine, task):
                                 'budget_exceeded': (ledger.fresh > ledger.budget['max_fresh_tokens'] or
                                                     ledger.calls > ledger.budget['max_calls'] or
                                                     ledger.seconds > ledger.budget['max_seconds'])})
-            store.finish(task, 'FAILED', reason)
-            store.project_status(task['project_id'], 'ESCALATED', reason)
+            store.fail_attempt(task, reason, last, model_side_failure(reason))
         except LeaseLost:
             pass
     finally:
         monitor.cancel()
         await asyncio.gather(monitor, return_exceptions=True)
+
+
+def model_side_failure(reason):
+    """Allowlist runtime protocol failures; verifier, integrity and budgets stay terminal."""
+    if reason.startswith('error:no_progress:'):
+        return True
+    prefixes = ['review_section_exhausted:', 'intake_format_exhausted:']
+    prefixes += [role + suffix for role in ('intake', 'coder', 'integrator', 'qa', 'review', 'fixer')
+                 for suffix in ('_action_format_exhausted:', '_handoff_exhausted:')]
+    return reason.startswith(tuple(prefixes))

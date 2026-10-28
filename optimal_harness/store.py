@@ -162,7 +162,37 @@ class Store:
             self._assert(c, task)
             c.execute("""UPDATE tasks SET status=?, failure=?, lease_owner=NULL,
                     lease_until=NULL WHERE id=?""", (status, reason, task["id"]))
-            self._event(c, "task_finished", {"task": task["id"], "status": status, "reason": reason})
+            self._event(c, "task_finished", {"task": task["id"], "generation": task["generation"], "status": status, "reason": reason})
+
+    def fail_attempt(self, task, reason, context, retryable):
+        """Atomically record failure and either queue a fresh generation or escalate."""
+        with self.transaction() as c:
+            self._assert(c, task)
+            row = c.execute('SELECT brief FROM tasks WHERE id=?', (task['id'],)).fetchone()
+            brief = json.loads(row['brief'])
+            failures = brief.get('attempt_failures', []) + [{
+                'generation': task['generation'], 'reason': reason, 'last_context': context}]
+            brief['attempt_failures'] = failures
+            status = self._meter_status(c, task)
+            retry = retryable and len(failures) < 3 and not status['stop']
+            c.execute("UPDATE tasks SET status=?, failure=?, brief=?, lease_owner=NULL, lease_until=NULL WHERE id=?",
+                      ('QUEUED' if retry else 'FAILED', reason, canonical(brief), task['id']))
+            self._event(c, 'task_finished', {'task': task['id'], 'generation': task['generation'],
+                        'status': 'FAILED', 'reason': reason})
+            self._event(c, 'stage_attempt_failed', {'task': task['id'], 'project': task['project_id'],
+                        'generation': task['generation'], 'reason': reason, 'retry': retry,
+                        'budget_stopped': status['stop'], 'last_context': context})
+            if not retry:
+                c.execute("UPDATE projects SET status='ESCALATED' WHERE id=?", (task['project_id'],))
+                self._event(c, 'project_status', {'project': task['project_id'], 'status': 'ESCALATED',
+                            'reason': '\n'.join(f['reason'] for f in failures)})
+            return retry
+
+    def stage_usage(self, task):
+        with self.transaction() as c:
+            return dict(c.execute("SELECT COALESCE(SUM(calls),0) calls, COALESCE(SUM(fresh),0) fresh, "
+                                 "COALESCE(SUM(cached),0) cached, MIN(started) started "
+                                 "FROM attempt_usage WHERE task=?", (task['id'],)).fetchone())
 
     def commit(self, task: dict, effect, allow_report=False):
         """Fence filesystem commit against concurrent reclaim using BEGIN IMMEDIATE."""
@@ -192,10 +222,11 @@ class Store:
         plan = json.loads(c.execute('SELECT plan FROM projects WHERE id=?', (row['project_id'],)).fetchone()['plan'])
         budget = DEFAULT_BUDGET | plan['stages'][row['stage']].get('budget', {})
         usage = dict(c.execute('SELECT * FROM attempt_usage WHERE task=? AND generation=?', (task['id'], task['generation'])).fetchone())
-        wall = time.time() - usage['started']
-        exceeded = (usage['fresh'] > budget['max_fresh_tokens'] or usage['calls'] > budget['max_calls'] or wall > budget['max_seconds'])
-        stop = exceeded or usage['fresh'] >= budget['max_fresh_tokens'] or usage['calls'] >= budget['max_calls'] or wall >= budget['max_seconds']
-        return {'usage': usage, 'stop': stop, 'budget_exceeded': exceeded}
+        total = dict(c.execute('SELECT SUM(fresh) fresh, SUM(calls) calls, MIN(started) started FROM attempt_usage WHERE task=?', (task['id'],)).fetchone())
+        wall = time.time() - total['started']
+        exceeded = (total['fresh'] > budget['max_fresh_tokens'] or total['calls'] > budget['max_calls'] or wall > budget['max_seconds'])
+        stop = exceeded or total['fresh'] >= budget['max_fresh_tokens'] or total['calls'] >= budget['max_calls'] or wall >= budget['max_seconds']
+        return {'usage': usage, 'stage_usage': total | {'seconds': wall}, 'stop': stop, 'budget_exceeded': exceeded}
 
     def meter(self, task, prompt=0, cached=0, completion=0, calls=1):
         if any(type(n) is not int or n < 0 for n in (prompt, cached, completion, calls)) or cached > prompt:
@@ -228,11 +259,15 @@ class Store:
 
     def projects(self) -> list[dict]:
         with self.transaction() as c:
-            return [dict(r) for r in c.execute("SELECT id,status,cycle,defect,repeats FROM projects ORDER BY id")]
+            return [dict(r) | {'stage_attempts': [dict(t) for t in c.execute(
+                'SELECT id AS task,stage,cycle,generation AS attempts FROM tasks WHERE project_id=? ORDER BY rowid', (r['id'],))]}
+                for r in c.execute("SELECT id,status,cycle,defect,repeats FROM projects ORDER BY id")]
 
     def tasks(self, project: str) -> list[dict]:
         with self.transaction() as c:
-            return [dict(r) for r in c.execute("SELECT id,stage,cycle,status,failure FROM tasks WHERE project_id=? ORDER BY rowid", (project,))]
+            return [dict(r) | {'brief': json.loads(r['brief']),
+                    'attempt_failures': json.loads(r['brief']).get('attempt_failures', [])}
+                    for r in c.execute("SELECT id,stage,cycle,status,failure,generation AS attempts,brief FROM tasks WHERE project_id=? ORDER BY rowid", (project,))]
 
     def project_status(self, project: str, status: str, reason: str = "") -> None:
         with self.transaction() as c:

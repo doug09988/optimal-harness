@@ -1,0 +1,52 @@
+# STAGE-09 — Stage-attempt retries with failure plumbing
+
+Role: FIXER/BUILDER. Branch: codex/stage-09-stage-retries,
+cut from codex/stage-08-review-superset. Sandbox rules as
+before: .git read-only (no commits; leave the worktree
+complete), no model endpoint access, stdlib only, never
+modify examples/graders, ~/harness, ~/vault.
+
+DIAGNOSIS (coordinator, from live runs verify-07/08/09):
+the interaction contracts are now correct — INTAKE passed
+in 07 and 08 with 05B feedback working in the wild; REVIEW's
+protocol defect was fixed in stage 8. But per-stage success
+is stochastic: verify-09's INTAKE died with
+intake_action_format_exhausted on a bad draw (templates were
+delivered; three oversized/invalid actions anyway). With
+nine stages and single attempts, one bad draw kills the
+project — full-pass probability is the product of nine
+sub-100% stage rates. The production harness solved this
+long ago: attempts. A failed attempt's verdict becomes the
+next attempt's brief. Port that property here.
+
+FIX:
+1. When a stage attempt fails with a MODEL-SIDE error
+(action-format exhaustion, section exhaustion,
+no_progress/repeated_action, invalid actions, handoff
+exhaustion), the engine retries that stage with a fresh
+generation, up to 2 retries (3 attempts total per stage),
+BEFORE the project escalates. Each retry's brief includes
+the prior attempt's failure reason and, where available,
+the last denial/template context, so the retry starts
+informed, not blind.
+2. NOT retried (immediate escalation, unchanged): verifier/
+gate defects routed to FIXER cycles, integrity/audit
+errors, budget exhaustion, missing deliverables at GATE,
+obligation_unaddressed. FIXER-cycle semantics unchanged.
+3. Audit/board: each attempt is a distinct recorded
+generation with its failure reason; the project result
+reports attempts per stage. Budgets: retries draw from the
+project's existing budget envelopes (no silent budget
+multiplication — if the stage budget is per-attempt, state
+it; total project caps still bind).
+4. Tests: scripted model that fails a stage once with a
+format error then succeeds → project completes, 2 attempts
+recorded, failure note present in the retry brief; a stage
+failing 3 times escalates with all three reasons preserved;
+a gate defect does NOT consume stage retries (goes to
+FIXER/escalation as today); budget exhaustion stops
+retries. Scripted pipeline + full suite green.
+
+DELIVERABLE: code + tests + stages/STAGE-09-result.md with
+exact sandbox outcomes, explicitly stating the retry/budget
+semantics chosen; no live claims.

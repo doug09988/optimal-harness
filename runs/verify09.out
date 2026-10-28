@@ -1,0 +1,26 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "2abb1c6d9f8d4224",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "intake_action_format_exhausted:three invalid or oversized actions; use smaller chunks; template: {\"action\":\"write\",\"data\":{\"slots\":{\"aggregation_edges\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"exit_behavior\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"input_access\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"input_emptiness\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"input_existence\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"invocation\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"malformed_entries\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"output_shape_order\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"},\"ties\":{\"detail\":\"Describe the actual gap\",\"status\":\"gap\"}}},\"path\":\"artifacts/intake.json\"}"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 34,
+    "head": "a283ee08e4dd932c3a37e6afba4c26ce6056f33a83d1b0036bdb4a6392f702ff"
+  },
+  "integrity_errors": []
+}

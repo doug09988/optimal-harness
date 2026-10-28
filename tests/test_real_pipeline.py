@@ -51,6 +51,12 @@ QA=UNIT.replace('test_counts','test_empty').replace('["a","a","b"]','[]').replac
 
 class RealPipeline(unittest.TestCase):
     def test_real_hidden_failure_routes_fixer_then_machine_pass(self):
+        self.run_pipeline(False)
+
+    def test_format_failure_retries_then_pipeline_completes(self):
+        self.run_pipeline(True)
+
+    def run_pipeline(self, retry):
         with tempfile.TemporaryDirectory(dir=BASE/'runs') as tmp:
             base=Path(tmp); root=base/'work'; grader=base/'grader'
             example=BASE/'examples'/'word-counter'
@@ -74,7 +80,13 @@ class RealPipeline(unittest.TestCase):
             # Initial implementation intentionally lowercases strings: unit/QA happy
             # paths pass, independently hidden case-sensitive tests genuinely fail.
             wrong=CODE.replace('counts=Counter(data)','counts=Counter(x.lower() for x in data)')
-            actions=[write('artifacts/intake.json',json.dumps(audit)),handoff,finish,*review('INTAKE'),
+            def retry_intake(prompt):
+                brief = json.loads(prompt.split('TASK BRIEF (pinned file):\n', 1)[1].split('\nALLOWED FILE POINTERS', 1)[0])
+                self.assertEqual(len(brief['attempt_failures']), 1)
+                self.assertIn('intake_action_format_exhausted:', brief['attempt_failures'][0]['reason'])
+                self.assertIn('Action template:', brief['attempt_failures'][0]['last_context'])
+                return write('artifacts/intake.json', json.dumps(audit))
+            actions=([{'action': 'invalid_' + str(i)} for i in range(3)] if retry else []) + [retry_intake if retry else write('artifacts/intake.json',json.dumps(audit)),handoff,finish,*review('INTAKE'),
                      write('wordfreq.py',wrong),write('test_unit.py',UNIT),handoff,finish,*review('CODER'),
                      *integration_and_qa(),fix,handoff,finish,*review('FIXER'),*integration_and_qa()]
             store=Store(base/'board.db'); engine=Engine(store,FakeQueue(actions),lease_seconds=120)
@@ -84,8 +96,13 @@ class RealPipeline(unittest.TestCase):
             tasks=store.tasks('wordcounter')
             self.assertEqual(sum(t['stage']=='FIXER' for t in tasks),1)
             self.assertEqual(len(tasks),14)
+            self.assertEqual(tasks[0]['attempts'], 2 if retry else 1)
+            self.assertTrue(all(t['attempts'] == 1 for t in tasks[1:]))
+            self.assertEqual(store.projects()[0]['stage_attempts'][0]['attempts'], 2 if retry else 1)
             with store.transaction() as c:
                 gates=[json.loads(r['payload']) for r in c.execute("SELECT payload FROM events WHERE kind='satisfiability_gate' ORDER BY seq")]
             self.assertEqual([g['report']['passed'] for g in gates],[False,True])
             self.assertEqual(engine.integrity_errors('wordcounter',root),[])
+            engine.coordinator_verdict('wordcounter', True, 'Scripted sandbox verification only')
+            self.assertEqual(store.project('wordcounter')['status'], 'DONE')
             self.assertTrue(store.audit()['valid'])

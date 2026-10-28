@@ -566,7 +566,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(new['generation'],2)
         status=reopened.meter(new,prompt=5,completion=2)
         self.assertEqual(status['usage']['fresh'],7)
-        self.assertFalse(status['stop'])
+        self.assertTrue(status['stop'])  # Stage envelope survives generation changes.
 
     def test_fingerprint_repeat_counts_survive_intervening_defects(self):
         self.submit()
@@ -726,7 +726,7 @@ class RuntimeTests(unittest.TestCase):
                                               'data': value}), 100, 80, 30)
         self.engine.queue = Queue([])
         self.submit(); asyncio.run(self.engine.serve(1))
-        self.assertEqual(self.engine.queue.calls, 3)
+        self.assertEqual(self.engine.queue.calls, 9)
         self.assertIn('intake_format_exhausted', self.store.tasks('wordcounter')[0]['failure'])
         self.assertFalse((self.root/'artifacts/intake.json').exists())
         self.assertFalse(any(cp['path'] == 'artifacts/intake.json'
@@ -745,3 +745,73 @@ class RuntimeTests(unittest.TestCase):
         asyncio.run(run())
 
 
+
+
+class StageRetryTests(unittest.TestCase):
+    setUp = RuntimeTests.setUp
+    submit = RuntimeTests.submit
+    # Reuse fixture helpers, without rerunning the parent test suite.
+    def test_three_attempts_preserve_reasons_and_context(self):
+        self.engine.queue = FakeQueue([{'action': 'unknown_' + str(i)} for i in range(9)])
+        self.submit()
+        asyncio.run(self.engine.serve())
+        task = self.store.tasks('wordcounter')[0]
+        self.assertEqual(task['attempts'], 3)
+        self.assertEqual(len(task['attempt_failures']), 3)
+        self.assertEqual(self.store.project('wordcounter')['status'], 'ESCALATED')
+        for failure in task['attempt_failures']:
+            self.assertIn('intake_action_format_exhausted:', failure['reason'])
+            self.assertIn('Action template:', failure['last_context'])
+        with self.store.transaction() as c:
+            reports = c.execute('SELECT count(*) FROM handoffs').fetchone()[0]
+        self.assertEqual(reports, 3)
+        self.assertTrue(self.store.audit()['valid'])
+
+    def test_budget_exhaustion_prevents_retry(self):
+        self.plan['stages']['INTAKE']['budget'] = {'max_calls': 3}
+        self.engine.queue = FakeQueue([{'action': 'unknown_' + str(i)} for i in range(3)])
+        self.submit()
+        asyncio.run(self.engine.serve())
+        task = self.store.tasks('wordcounter')[0]
+        self.assertEqual(task['attempts'], 1)
+        self.assertEqual(self.engine.queue.calls, 3)
+        self.assertEqual(self.store.project('wordcounter')['status'], 'ESCALATED')
+
+    def test_retries_share_remaining_call_budget(self):
+        self.plan['stages']['INTAKE']['budget'] = {'max_calls': 4}
+        self.engine.queue = FakeQueue([{'action': 'unknown_' + str(i)} for i in range(4)])
+        self.submit()
+        asyncio.run(self.engine.serve())
+        task = self.store.tasks('wordcounter')[0]
+        self.assertEqual(task['attempts'], 2)
+        self.assertEqual(self.engine.queue.calls, 4)
+        self.assertIn('circuit_breaker:model_calls', task['failure'])
+
+    def test_retry_classifier_excludes_external_failures(self):
+        from optimal_harness.runtime import model_side_failure
+        for reason in ('circuit_breaker:model_calls', 'citation_check_failed:x',
+                       'modified-after-checkpoint:x', 'obligation_unaddressed:x',
+                       'error:missing_deliverables:x', 'honest_worker_failure:x',
+                       'pinned input or charter changed'):
+            self.assertFalse(model_side_failure(reason), reason)
+        for reason in ('review_section_exhausted:observations', 'coder_handoff_exhausted:x',
+                       'error:no_progress:invalid_actions', 'error:no_progress:repeated_action'):
+            self.assertTrue(model_side_failure(reason), reason)
+
+
+    def test_retry_rechecks_and_checkpoints_existing_identical_deliverable(self):
+        from optimal_harness.verifier import LIFECYCLE
+        from unittest.mock import patch
+        lines = [line for line in (self.root/'spec.md').read_text().splitlines() if ':' in line]
+        audit = {'slots': {key: {'status': 'citation', 'quote': line, 'because': 'Explicit requirement'}
+                           for key, line in zip(LIFECYCLE, lines)}}
+        write = {'action': 'write', 'path': 'artifacts/intake.json', 'data': audit}
+        self.engine.queue = FakeQueue([write] + [{'action': 'read', 'path': 'spec.md'}]*4 +
+                                     [write, {'action': 'finish', 'summary': 'Complete', 'open_discrepancies': []}])
+        self.submit()
+        with patch.object(self.engine, '_advance'):
+            asyncio.run(self.engine.serve())
+        task = self.store.tasks('wordcounter')[0]
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual(task['attempts'], 2)
+        self.assertEqual(self.engine.integrity_errors('wordcounter', self.root), [])
