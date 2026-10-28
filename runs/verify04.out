@@ -1,0 +1,26 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "40a4d14bbc474b48",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "error:no_progress:repeated_action"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 44,
+    "head": "cc8f8fc0774577e215c8e55bbc130c687f8740059b5f6c459967c9f10a0c5bdc"
+  },
+  "integrity_errors": []
+}

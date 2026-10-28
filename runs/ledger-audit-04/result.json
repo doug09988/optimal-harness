@@ -1,0 +1,26 @@
+{
+  "project": [
+    {
+      "id": "ledgeraudit",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "49155075aafa4e57",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "intake_spec_gaps:ties: unresolved spec gap: The specification does not specify behavior when two or more categories have the same total."
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 25,
+    "head": "033ea2469516e4331f55725be38234ac3a00ef455be2d5cf70b7ff0b10a50af3"
+  },
+  "integrity_errors": []
+}

@@ -1,0 +1,42 @@
+# STAGE-05B — INTAKE recovery after pointer rejection (fixer)
+
+Role: FIXER. Branch: codex/stage-05b-intake-recovery (from
+codex/stage-05-honesty). Sandbox rules as before: .git is
+read-only (no commits; leave the worktree complete), no model
+endpoint access, stdlib only, never modify examples/graders,
+~/harness, ~/vault.
+
+DEFECT (coordinator-verified from live run
+wordcounter-verify-04 on stage 5): INTAKE's first write used a
+pointer citation for slot input_access whose span was a
+whitespace-only line; the runtime correctly denied it
+("INTAKE pointer: empty line span: input_access"). The worker
+then fell into a write-read-write loop, rewrote intake.json
+three times (the artifact on disk was valid), never finished,
+and died error:no_progress:repeated_action plus a runaway
+8192-token generation. Stage 5 unit tests all pass; the live
+behavior regressed vs the pre-stage-5 full pipeline pass.
+
+FIX (all three, narrowly scoped):
+1. Actionable span feedback: when a pointer span is rejected
+(empty, whitespace-only, reversed, out of range), the denial
+observation must include the slot, the reason, the spec's
+total line count, and the text of the nearest non-empty lines
+around the requested span, so one correction can succeed.
+2. Completion signal: when INTAKE's intake.json passes
+validation, the success observation must state plainly that
+the artifact is complete and valid and that the remaining
+step is to finish. A byte-identical rewrite of an already
+valid artifact is denied with that same message (it must not
+silently succeed and invite another rewrite).
+3. Charter fallback: intake.md states pointers are preferred
+but if a slot's pointer is rejected twice, cite that slot
+with free text instead of retrying pointers.
+
+TESTS: rejection feedback content (incl. nearest-line text),
+identical-rewrite denial on a valid artifact, two-rejection
+fallback path intact, plus all existing suites green. Do not
+weaken any gate, budget, or the no-progress detector itself.
+
+DELIVERABLE: code + tests + stages/STAGE-05B-result.md with
+exact sandbox test outcomes; no live claims.

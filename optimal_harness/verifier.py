@@ -119,7 +119,16 @@ class Verifier:
             from .checks import KINDS, check
             if kind in KINDS:
                 return check(self, item)
-            if kind == "discrepancy-free":
+            if kind == 'obligation-discrepancy-free':
+                from .obligations import acknowledged_discrepancy
+                doc = self.json(item['path'])
+                value = doc.get(item['key'])
+                known = {entry['id'] for entry in item['obligations']}
+                linked = [entry.get('discrepancy') for entry in doc.get('obligation_resolutions', [])
+                          if isinstance(entry, dict) and entry.get('id') in known]
+                if not isinstance(value, list) or any(not acknowledged_discrepancy(text, item['obligations']) and text not in linked for text in value):
+                    return 'unresolved structured discrepancies:' + item['key']
+            elif kind == "discrepancy-free":
                 value = self.json(item["path"]).get(item["key"])
                 if not isinstance(value, list) or value:
                     return "unresolved structured discrepancies:" + item["key"]

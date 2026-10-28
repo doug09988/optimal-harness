@@ -1,0 +1,86 @@
+# STAGE-05 — Honesty mechanics: pointer citations, generated
+# handoffs, all-role chunking, obligation ledger
+
+Role: CODER/FIXER as needed. The coordinator (Doofy) verifies
+independently. You are on git branch codex/stage-05-honesty in
+~/optimal-harness. Your sandbox mounts .git READ-ONLY: do not
+attempt commits; leave the worktree complete and say so in your
+result file. Your sandbox cannot reach the model endpoint
+(loopback); do not attempt live runs — the coordinator executes
+them. Standard library only. Never modify ~/harness or ~/vault.
+Complete the workstreams IN ORDER; finish each fully (code +
+tests) before starting the next, and report partial completion
+honestly if you run short.
+
+CONTEXT (coordinator-verified defects, all from live runs):
+(a) INTAKE citations fail verbatim checks because the model
+retypes quotes and drops words (ledger-audit runs 01-03).
+(b) Stage 3 gave CODER chunked writes (more-marker + size
+feedback); QA in ledger-audit-05 still died with
+error:no_progress:invalid_actions writing its test file —
+the protection is CODER-only.
+(c) ledger-audit-05: the spec required recording a missing
+"Appendix B" fee schedule in the CODER handoff's
+open_discrepancies; the handoff claimed [] — a well-formed
+omission no shape gate can catch.
+
+WORKSTREAM 1 — All-role chunking: generalize the CODER
+write/append size discipline (encoded-action size limit,
+deterministic size feedback, bounded format retries with a
+named exhaustion error) to every role that writes files
+(INTAKE, INTEGRATOR, QA, REVIEW, FIXER). The more-marker may
+remain write-only semantics per role needs; rejected actions
+never execute; existing CODER behavior and tests unchanged.
+
+WORKSTREAM 2 — Pointer citations for INTAKE: in addition to
+free-text quotes (gate stays as backstop), an intake slot may
+cite by pointer: {slot, source, start_line, end_line, because}.
+The runtime extracts the exact lines from the source, builds
+the canonical quote, and materializes artifacts/intake.json
+itself. Out-of-range or empty spans are rejected with
+deterministic feedback. Update the intake charter to prefer
+pointers. Tests: exact extraction incl. multi-line spans,
+boundary rejection, and the free-text gate still catching a
+paraphrase when pointers are not used.
+
+WORKSTREAM 3 — Generated handoffs: workers no longer
+hand-write handoff.json. The finish action carries summary +
+open_discrepancies; the runtime composes the canonical
+handoff document (status, deliverables from the plan,
+obligation resolutions from workstream 4) and validates it
+with the existing ready_document predicate before acceptance.
+Keep the stage-4 event semantics (handoff_error_reported vs
+handoff_accepted after checks pass). Tests: composed handoff
+shape, missing-field feedback, event ordering.
+
+WORKSTREAM 4 — Obligation ledger: new deterministic module.
+At submit time, extract from the project spec: (i) reference
+mentions matching Appendix <letter>, Section <number>,
+Figure <number>, Table <number>; a reference is RESOLVED if a
+matching heading/anchor exists in the spec, otherwise it
+becomes an obligation of kind missing_reference; (ii) duty
+clauses: sentences containing "record", "report", or "flag"
+together with "handoff" or "open_discrepancies" become
+obligations of kind duty. Persist the ledger with the run
+(e.g. obligations.json beside submitted-plan.json), each item
+with a stable id. Enforcement: the GATE fails with
+obligation_unaddressed:<id> unless every missing_reference
+obligation's label appears in the CODER handoff's
+open_discrepancies (case-insensitive substring is acceptable)
+and every duty obligation is addressed by at least one stage
+handoff (evidenced or listed as a discrepancy). Update all
+role charters with one honesty line: reporting a gap is a
+pass; inventing or silently omitting required material is
+the unforgivable failure. Tests: missing appendix fails the
+gate without the flag and passes with it; an existing
+appendix creates no obligation; duty extraction is
+conservative (no obligation from unrelated prose).
+
+NON-NEGOTIABLE: verifier/gate strictness elsewhere unchanged;
+existing examples and their graders immutable; write-scoping
+unchanged; all current tests keep passing (coordinator runs
+the full suite plus live word-counter and ledger-audit runs).
+
+DELIVERABLES: code + tests; stages/STAGE-05-result.md stating
+per-workstream status, design decisions, and exact sandbox
+test outcomes.

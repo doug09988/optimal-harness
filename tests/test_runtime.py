@@ -39,13 +39,13 @@ class RuntimeTests(unittest.TestCase):
             count=c.execute("SELECT count(*) FROM events WHERE kind='additional_actions_discarded'").fetchone()[0]
         self.assertEqual(count,1)
 
-    def run_coder(self, actions):
+    def run_coder(self, actions, role='CODER'):
         from optimal_harness.engine import make_brief
         from unittest.mock import patch
         self.submit()
         task = self.store.claim('worker', 60)
-        task['stage'] = 'CODER'
-        task['brief'] = make_brief('CODER', self.store.project('wordcounter')['plan'])
+        task['stage'] = role
+        task['brief'] = make_brief(role, self.store.project('wordcounter')['plan'])
         class Queue(FakeQueue):
             async def request(q, prompt, *args):
                 q.calls += 1
@@ -57,6 +57,96 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(self.engine, '_advance'):
             asyncio.run(self.engine.run_task(task))
         return self.store.tasks('wordcounter')[0]
+
+    def test_all_writing_roles_bound_invalid_actions(self):
+        for role in ('INTAKE', 'INTEGRATOR', 'QA', 'REVIEW', 'FIXER'):
+            with self.subTest(role=role):
+                # Each case needs a separate project/store.
+                if role != 'INTAKE':
+                    self.setUp()
+                task = self.run_coder([
+                    {'action': 'write', 'path': 'never-created', 'data': 'x'*5000}
+                ] * 3, role=role)
+                self.assertIn(role.lower() + '_action_format_exhausted', task['failure'])
+                self.assertEqual(self.engine.queue.calls, 3)
+                self.assertFalse((self.root/'never-created').exists())
+
+    def test_qa_chunked_writes(self):
+        target = self.plan['stages']['QA']['deliverables'][0]
+        task = self.run_coder([
+            {'action': 'write', 'path': target, 'data': 'first', 'more': True},
+            {'action': 'append', 'path': target, 'data': 'last', 'more': False},
+            {'action': 'fail', 'reason': 'test stops after writes'},
+        ], role='QA')
+        self.assertEqual((self.root/target).read_text(), 'firstlast')
+        self.assertIn('test stops after writes', task['failure'])
+
+    def test_generated_handoff_shape_and_event_order(self):
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': '# code'},
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
+            {'action': 'finish', 'summary': 'implemented', 'open_discrepancies': []},
+        ])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        paths = list(self.root.glob('vault/runs/*/a*/handoff.json'))
+        data = json.loads(paths[0].read_text())
+        self.assertEqual(data, {'status': 'ready', 'summary': 'implemented',
+                              'open_discrepancies': [], 'deliverables': ['wordfreq.py', 'test_unit.py'],
+                              'obligation_resolutions': []})
+        with self.store.transaction() as c:
+            kinds = [r[0] for r in c.execute('SELECT kind FROM events ORDER BY rowid')]
+        self.assertLess(kinds.index('stage_checks_passed'), kinds.index('handoff_accepted'))
+        self.assertNotIn('handoff_error_reported', kinds)
+
+    def test_generated_handoff_missing_fields_feedback(self):
+        def corrected(prompt):
+            self.assertIn('open_discrepancies', prompt)
+            return {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': '# code'},
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
+            {'action': 'finish', 'summary': 'missing fields'}, corrected,
+        ])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+
+    def test_intake_pointer_chunks_materialized_by_runtime(self):
+        from optimal_harness.verifier import LIFECYCLE
+        text = (self.root/'spec.md').read_text()
+        slots = {key: {'slot': key, 'source': 'spec.md', 'start_line': 1,
+                       'end_line': len(text.splitlines()), 'because': 'explicit rules'} for key in LIFECYCLE}
+        data = json.dumps({'slots': slots})
+        midpoint = len(data)//2
+        task = self.run_coder([
+            {'action': 'write', 'path': 'artifacts/intake.json', 'data': data[:midpoint], 'more': True},
+            {'action': 'append', 'path': 'artifacts/intake.json', 'data': data[midpoint:], 'more': False},
+            {'action': 'finish', 'summary': 'source audit', 'open_discrepancies': []},
+        ], role='INTAKE')
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        doc = json.loads((self.root/'artifacts/intake.json').read_text())
+        self.assertEqual(doc['slots']['invocation']['quote'], text)
+
+    def test_review_chunks_validate_only_complete_document(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        report = {'reviewed_stage': '', 'counterexamples': ['attempt missing input'],
+                  'observations': [], 'unresolved': []}
+        data = json.dumps(report)
+        task = self.run_coder([
+            {'action': 'write', 'path': target, 'data': data[:20], 'more': True},
+            {'action': 'append', 'path': target, 'data': data[20:], 'more': False},
+            {'action': 'finish', 'summary': 'reviewed counterexample', 'open_discrepancies': []},
+        ], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual(json.loads((self.root/target).read_text()), report)
+
+    def test_generated_handoff_exhaustion_reports_error_without_acceptance(self):
+        task = self.run_coder([
+            {'action': 'finish', 'summary': 'invalid', 'open_discrepancies': None}
+        ] * 3)
+        self.assertIn('coder_handoff_exhausted:handoff_not_ready_or_malformed:finish.open_discrepancies', task['failure'])
+        with self.store.transaction() as c:
+            kinds = [r[0] for r in c.execute('SELECT kind FROM events ORDER BY rowid')]
+        self.assertIn('handoff_error_reported', kinds)
+        self.assertNotIn('handoff_accepted', kinds)
 
     def test_coder_chunks_recover_from_truncation_and_oversize(self):
         import re
@@ -316,6 +406,87 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(denials),1)
         self.assertIn('missing=exit_behavior',denials[0]['reason'])
         self.assertEqual(parse_action('{"action":"write","path":"x.json","data":[]}')['data'],[])
+
+    def test_intake_pointer_exact_lines_and_boundaries(self):
+        from optimal_harness.runtime import intake_document
+        from optimal_harness.verifier import LIFECYCLE
+        text = 'α first\nsecond\n\nlast'
+        def document(start, end):
+            return {'slots': {key: {'slot': key, 'source': 'spec.md',
+                    'start_line': start, 'end_line': end, 'because': 'rule'} for key in LIFECYCLE}}
+        for start, end, expected in ((1, 2, 'α first\nsecond\n'), (4, 4, 'last')):
+            result = intake_document(document(start, end), lambda source: text)
+            self.assertEqual(result['slots']['invocation']['quote'], expected)
+        for start, end in ((0, 1), (1, 5), (3, 2), (3, 3), (True, 2), (1, '2')):
+            with self.subTest(start=start, end=end), self.assertRaises(PolicyError):
+                intake_document(document(start, end), lambda source: text)
+
+    def test_intake_span_rejection_feedback(self):
+        from optimal_harness.runtime import intake_document
+        from optimal_harness.verifier import LIFECYCLE
+        text = 'before rule\n  \n\nafter rule\n'
+        for start, end, reason in ((2, 3, 'empty line span'), (3, 2, 'invalid inclusive line span'),
+                                   (0, 9, 'invalid inclusive line span'),
+                                   (None, None, 'invalid inclusive line span')):
+            with self.subTest(start=start, end=end):
+                doc = {'slots': {key: {'source': 'spec.md', 'start_line': start,
+                       'end_line': end, 'because': 'rule'} for key in LIFECYCLE}}
+                with self.assertRaises(PolicyError) as caught:
+                    intake_document(doc, lambda source: text)
+                message = str(caught.exception)
+                for part in (LIFECYCLE[0], reason, 'spec total lines=4', 'line 1: before rule'):
+                    self.assertIn(part, message)
+                if start is not None:
+                    self.assertIn('line 4: after rule', message)
+        empty = {'slots': {key: {'source': 'spec.md', 'start_line': 1,
+                 'end_line': 1, 'because': 'rule'} for key in LIFECYCLE}}
+        with self.assertRaisesRegex(PolicyError, 'spec total lines=0.*none'):
+            intake_document(empty, lambda source: '')
+
+    def test_intake_valid_identical_rewrite_denied_then_finish(self):
+        from optimal_harness.runtime import INTAKE_COMPLETE
+        from optimal_harness.verifier import LIFECYCLE
+        doc = {'slots': {key: {'status': 'citation', 'quote': 'Input', 'because': 'rule'}
+                         for key in LIFECYCLE}}
+        write = {'action': 'write', 'path': 'artifacts/intake.json', 'data': doc}
+        def repeat(prompt):
+            self.assertIn(INTAKE_COMPLETE, prompt)
+            return write
+        def finish(prompt):
+            self.assertIn('TOOL_DENIED: ' + INTAKE_COMPLETE, prompt)
+            return {'action': 'finish', 'summary': 'audit complete', 'open_discrepancies': []}
+        task = self.run_coder([write, repeat, finish], role='INTAKE')
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        with self.store.transaction() as c:
+            denials = [json.loads(r[0]) for r in c.execute("SELECT payload FROM events WHERE kind='tool_denied'")]
+            writes = [json.loads(r[0]) for r in c.execute("SELECT payload FROM events WHERE kind='tool_action'")]
+        self.assertEqual([d['reason'] for d in denials], [INTAKE_COMPLETE])
+        self.assertEqual(sum(w.get('path_or_name') == 'artifacts/intake.json' for w in writes), 1)
+
+    def test_intake_two_pointer_rejections_allow_free_text_fallback(self):
+        from optimal_harness.verifier import LIFECYCLE
+        from copy import deepcopy
+        text = (self.root/'spec.md').read_text()
+        blank = next(n for n, line in enumerate(text.splitlines(), 1) if not line.strip())
+        doc = {'slots': {key: {'status': 'citation', 'quote': 'Input', 'because': 'rule'}
+                         for key in LIFECYCLE}}
+        bad = deepcopy(doc)
+        bad['slots']['input_access'] = {'source': 'spec.md', 'start_line': blank,
+                                        'end_line': blank, 'because': 'rule'}
+        def second(prompt):
+            self.assertIn('empty line span: input_access', prompt)
+            value = deepcopy(bad)
+            value['slots']['input_access']['because'] = 'second attempt'
+            return {'action': 'write', 'path': 'artifacts/intake.json', 'data': value}
+        def fallback(prompt):
+            self.assertIn('empty line span: input_access', prompt)
+            self.assertIn('instead of retrying pointers', prompt)
+            return {'action': 'write', 'path': 'artifacts/intake.json', 'data': doc}
+        task = self.run_coder([
+            {'action': 'write', 'path': 'artifacts/intake.json', 'data': bad}, second, fallback,
+            {'action': 'finish', 'summary': 'audit complete', 'open_discrepancies': []}], role='INTAKE')
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual(json.loads((self.root/'artifacts/intake.json').read_text()), doc)
 
     def test_intake_format_normalization_does_not_invent_evidence(self):
         from optimal_harness.runtime import intake_document

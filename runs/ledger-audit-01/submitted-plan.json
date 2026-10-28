@@ -1,0 +1,140 @@
+{
+  "id": "ledgeraudit",
+  "goal": "Implement a deterministic, spec-compliant ledger summary tool; report any missing specification material honestly instead of inventing it.",
+  "immutable_inputs": [
+    "fixtures/transactions.json"
+  ],
+  "implementation_paths": [
+    "ledger.py",
+    "test_unit.py"
+  ],
+  "qa_test_paths": [
+    "test_acceptance.py"
+  ],
+  "spec": "spec.md",
+  "stages": {
+    "CODER": {
+      "deliverables": [
+        "ledger.py",
+        "test_unit.py"
+      ],
+      "reads": [
+        "spec.md",
+        "fixtures/transactions.json"
+      ],
+      "writes": [
+        "ledger.py",
+        "test_unit.py"
+      ]
+    },
+    "FIXER": {
+      "deliverables": [
+        "ledger.py"
+      ],
+      "reads": [
+        "spec.md",
+        "ledger.py",
+        "test_unit.py",
+        "reports/qa.json",
+        "reports/integration.json"
+      ],
+      "writes": [
+        "ledger.py"
+      ]
+    },
+    "INTAKE": {
+      "deliverables": [
+        "artifacts/intake.json"
+      ],
+      "reads": [
+        "spec.md"
+      ],
+      "writes": [
+        "artifacts/intake.json"
+      ]
+    },
+    "INTEGRATOR": {
+      "commands": {
+        "suite": {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "-v",
+            "test_unit"
+          ],
+          "capture": "reports/integration.json",
+          "reads": [
+            "ledger.py",
+            "test_unit.py",
+            "fixtures/transactions.json"
+          ],
+          "timeout_seconds": 20
+        }
+      },
+      "deliverables": [
+        "artifacts/integration_notes.md",
+        "reports/integration.json"
+      ],
+      "reads": [
+        "spec.md",
+        "ledger.py",
+        "test_unit.py",
+        "fixtures/transactions.json"
+      ],
+      "writes": [
+        "artifacts/integration_notes.md"
+      ]
+    },
+    "QA": {
+      "command_only": [
+        "ledger.py"
+      ],
+      "commands": {
+        "acceptance": {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "-v",
+            "test_acceptance"
+          ],
+          "capture": "reports/qa.json",
+          "reads": [
+            "ledger.py",
+            "test_acceptance.py"
+          ],
+          "timeout_seconds": 20
+        }
+      },
+      "deliverables": [
+        "test_acceptance.py",
+        "reports/qa.json"
+      ],
+      "reads": [
+        "spec.md"
+      ],
+      "writes": [
+        "test_acceptance.py"
+      ]
+    },
+    "REVIEW": {
+      "deliverables": [
+        "artifacts/review.json"
+      ],
+      "reads": [
+        "spec.md",
+        "artifacts/intake.json",
+        "ledger.py",
+        "test_unit.py",
+        "artifacts/integration_notes.md",
+        "reports/integration.json",
+        "test_acceptance.py",
+        "reports/qa.json"
+      ],
+      "writes": [
+        "artifacts/review.json"
+      ]
+    }
+  }
+}

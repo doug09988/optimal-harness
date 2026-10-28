@@ -1,0 +1,26 @@
+{
+  "project": [
+    {
+      "id": "ledgeraudit",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "420f363a0c56452c",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "citation_check_failed:artifacts/intake.json.slots.aggregation_edges: non-verbatim quote or missing because-clause"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 25,
+    "head": "001e5987e967b1bbd4bc4a5d06ca4f7072fc5e3f8c44be71ef29144700b2d842"
+  },
+  "integrity_errors": []
+}

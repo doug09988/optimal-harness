@@ -8,10 +8,29 @@ from .ledger import Ledger
 from .model import SYSTEM_PREFIX, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
-from .handoff import ready_document
+from .handoff import ready_document, compose_handoff
 
 
-def intake_document(data):
+
+INTAKE_COMPLETE = ('INTAKE artifact is complete and valid. The remaining step is to finish '
+                   'with summary and open_discrepancies; do not rewrite the artifact.')
+
+
+def intake_span_error(key, reason, lines, start, end):
+    """Give bounded, source-derived correction context without relaxing span checks."""
+    anchors = [n for n in (start, end) if type(n) is int]
+    low = max(1, min(len(lines), min(anchors))) if anchors and lines else 1
+    high = max(1, min(len(lines), max(anchors))) if anchors and lines else low
+    before = next((n for n in range(min(low, len(lines)), 0, -1) if lines[n-1].strip()), None)
+    after = next((n for n in range(high, len(lines)+1) if lines[n-1].strip()), None)
+    nearby = sorted({n for n in (before, after) if n is not None})
+    context = '; '.join(f'line {n}: {lines[n-1].rstrip()[:400]}' for n in nearby)
+    return PolicyError(f'INTAKE pointer: {reason}: {key}; requested span={start!r}..{end!r}; '
+                       f'spec total lines={len(lines)}; nearest non-empty lines: '
+                       + (context or '(none)'))
+
+
+def intake_document(data, source_read=None):
     """Normalize only an unambiguous wrapper omission; never invent slot content."""
     from .verifier import LIFECYCLE
     try:
@@ -21,6 +40,13 @@ def intake_document(data):
     if isinstance(document, dict) and set(document) == set(LIFECYCLE):
         document = {'slots': document}
     slots = document.get('slots', {}) if isinstance(document, dict) else {}
+    if isinstance(slots, list):
+        if any(not isinstance(item, dict) or item.get('slot') not in LIFECYCLE for item in slots):
+            raise PolicyError('INTAKE pointer: invalid slot')
+        if len({item['slot'] for item in slots}) != len(slots):
+            raise PolicyError('INTAKE pointer: duplicate slot')
+        slots = {item['slot']: item for item in slots}
+        document = {'slots': slots}
     if not isinstance(slots, dict) or set(slots) != set(LIFECYCLE):
         keys = set(slots) if isinstance(slots, dict) else set()
         raise PolicyError('INTAKE schema: rewrite the COMPLETE document with slots object; missing=' +
@@ -28,6 +54,22 @@ def intake_document(data):
                           ','.join(sorted(keys-set(LIFECYCLE))))
     for key in LIFECYCLE:
         item = slots[key]
+        if isinstance(item, dict) and any(field in item for field in ('source', 'start_line', 'end_line')):
+            start, end = item.get('start_line'), item.get('end_line')
+            if item.get('slot', key) != key:
+                raise PolicyError('INTAKE pointer: slot mismatch: ' + key)
+            if source_read is None or not isinstance(item.get('source'), str):
+                raise PolicyError('INTAKE pointer: source reader and source required')
+            lines = source_read(item['source']).splitlines(keepends=True)
+            if type(start) is not int or type(end) is not int or not 1 <= start <= end <= len(lines):
+                reason = ('non-integer bounds' if type(start) is not int or type(end) is not int else
+                          'reversed bounds' if start > end else 'out of range')
+                raise intake_span_error(key, 'invalid inclusive line span (' + reason + ')', lines, start, end)
+            quote = ''.join(lines[start-1:end])
+            if not quote.strip():
+                raise intake_span_error(key, 'empty line span', lines, start, end)
+            item = dict(item, status='citation', quote=quote)
+            slots[key] = item
         if not isinstance(item, dict) or item.get('status') not in ('citation', 'gap'):
             raise PolicyError('INTAKE schema: ' + key + ' must be an object with status=citation or gap')
         fields = ('quote', 'because') if item['status'] == 'citation' else ('detail',)
@@ -47,18 +89,19 @@ async def run_task(engine, task):
     monitor = asyncio.create_task(engine._heartbeat(task))
     broker = handoff = evidence = None
     manifest_path = f"vault/runs/{task['id']}/a{task['generation']}/manifest.json"
-    last = 'New run. Write deliverables, write ready handoff, then finish.'
+    last = 'New run. Write deliverables, then finish with summary and open_discrepancies.'
     last_observation = last
     repeat = 0
     previous = None
     seen_actions = {}
     intake_format_errors = 0
     partial = set()
-    coder_size_errors = 0
+    structured_chunks = {}
+    action_format_errors = 0
     coder_handoff_errors = 0
     finish_feedback = ''
     chunk_limit = min(4096, max(1, int(ledger.budget['max_completion_tokens']) - 512))
-    chunk_feedback = (f'CODER action size: action may be truncated or oversized. Use a smaller chunk; '
+    chunk_feedback = (f"{task['stage']} action size: action may be truncated or oversized. Use a smaller chunk; "
                       f'ONE complete JSON action at most {chunk_limit} UTF-8 bytes including escaping. '
                       'First write with more=true, then append with more=true; final append more=false. '
                       'Rejected actions wrote no bytes; retry only the rejected chunk.')
@@ -88,6 +131,17 @@ async def run_task(engine, task):
             return count
         return store.commit(task, effect)
 
+    def source_read(source):
+        # Read the full source through the existing scoped, bounded page broker.
+        chunks, offset = [], 0
+        while True:
+            text = broker.read(source, offset, broker.max_bytes)
+            if not text:
+                break
+            chunks.append(text)
+            offset += len(text.encode('utf-8'))
+        return ''.join(chunks)
+
     try:
         if not engine._pins_intact(plan, root):
             raise PolicyError('pinned input or charter changed')
@@ -106,14 +160,14 @@ async def run_task(engine, task):
                 'already_checkpointed_do_not_repeat': sorted(set(checkpoints) - partial),
                 'role_work_complete': not missing,
                 'current_goal': ('Produce remaining deliverables only' if missing else
-                                 'The role work is ALREADY COMPLETE. Only write the ready handoff and finish.'),
+                                 'The role work is ALREADY COMPLETE. Finish with summary and open_discrepancies.'),
             }
             prompt = engine._context(root, context_task, broker, last) + '\nSAVED RUN STATE:\n' + progress
             prompt += ('\nEXECUTION RULE: The LAST TOOL OBSERVATION has ALREADY EXECUTED. '
                        'Do not request that same read again. Use the returned content to do the next step. '
                        'Files in checkpointed are already written; do not repeat those writes. '
-                       'Once all deliverables are checkpointed, write the handoff JSON with '
-                       'status=ready, open_discrepancies=[], summary=<factual summary>, then finish. '
+                       'Once all deliverables are checkpointed, finish with summary=<factual summary> and '
+                       'open_discrepancies=<list of actual gaps; [] only if none>. Runtime generates the handoff. '
                        'Respond with ONE next JSON action only.')
             missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
             commands = {cmd['capture']: name for name, cmd in conf.get('commands', {}).items()}
@@ -122,9 +176,9 @@ async def run_task(engine, task):
                 next_step = ('Run named command ' + commands[target] if target in commands else
                              ('Continue ' + target + ' using action=append; final chunk more=false' if target in partial else
                               'Create ' + target + ' using action=write, path=' + target +
-                              (', data=<file text or first chunk>, more=<true if chunks remain>' if task['stage'] == 'CODER' else ', data=<complete file text>')))
+                              ', data=<file text or first chunk>, more=<true if chunks remain>'))
             elif handoff not in checkpoints:
-                next_step = 'Write ready handoff at ' + handoff
+                next_step = 'Emit action=finish with summary and open_discrepancies; runtime generates ' + handoff
             else:
                 next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
             if ledger.calls == 0 and plan['spec'] in task['brief']['permitted_reads']:
@@ -135,8 +189,7 @@ async def run_task(engine, task):
             prompt += '\nCompleted model calls in this attempt: ' + str(ledger.calls)
             if last.startswith('{') and '"content":' in last:
                 prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
-            if task['stage'] == 'CODER':
-                prompt += '\nCHUNK RULE: ' + chunk_feedback
+            prompt += '\nCHUNK RULE: ' + chunk_feedback
             cap, timeout = ledger.reserve(prompt, SYSTEM_PREFIX)
             store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
                         'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
@@ -165,18 +218,17 @@ async def run_task(engine, task):
                 if result.text.lstrip()[end:].strip():
                     store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
                                 'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
-                if task['stage'] == 'CODER' and len(first.encode('utf-8')) > chunk_limit:
+                if len(first.encode('utf-8')) > chunk_limit:
                     raise ModelError('encoded action exceeds chunk limit')
                 action = parse_action(first)
             except (ModelError, ValueError) as exc:
                 # A bounded correction is fresh, not replay of malformed history.
                 last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
                         + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
-                if task['stage'] == 'CODER':
-                    coder_size_errors += 1
-                    last = chunk_feedback + '\n' + last
-                    if coder_size_errors >= 3:
-                        raise RuntimeError('coder_action_format_exhausted:three invalid or oversized actions; use smaller chunks')
+                action_format_errors += 1
+                last = chunk_feedback + '\n' + last
+                if action_format_errors >= 3:
+                    raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks')
                 repeat += 1
                 if repeat >= 3:
                     raise RuntimeError('error:no_progress:invalid_actions')
@@ -194,15 +246,29 @@ async def run_task(engine, task):
                 if partial:
                     raise RuntimeError('incomplete_chunked_files:' + ','.join(sorted(partial)))
                 try:
+                    if 'open_discrepancies' in action:
+                        try:
+                            from .obligations import resolutions
+                            resolved = resolutions(action.get('obligation_resolutions', []),
+                                                   plan.get('obligations', []),
+                                                   action.get('open_discrepancies', []), source_read)
+                            document = compose_handoff(action, conf.get('deliverables', []), resolved)
+                        except (ValueError, PolicyError, OSError) as exc:
+                            raise RuntimeError('handoff_not_ready_or_malformed:' + str(exc)) from exc
+                        write_checkpoint(handoff, canonical(document) + '\n')
                     engine._check_stage(root, task, conf, checkpoints, handoff)
                 except RuntimeError as exc:
-                    if task['stage'] != 'CODER' or not str(exc).startswith((
+                    if (task['stage'] != 'CODER' and 'open_discrepancies' not in action and
+                            str(exc).startswith('error:missing_deliverables:')):
+                        raise
+                    if not str(exc).startswith((
                             'handoff_not_ready_or_malformed', 'error:missing_deliverables:')):
                         raise
                     coder_handoff_errors += 1
                     if coder_handoff_errors >= 3:
-                        raise RuntimeError('coder_handoff_exhausted:' + str(exc)) from exc
-                    finish_feedback = 'Correct readiness failure before finish: ' + str(exc)
+                        raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc)) from exc
+                    finish_feedback = ('Correct readiness failure before finish: ' + str(exc) +
+                                       '; finish requires summary and open_discrepancies')
                     last = finish_feedback
                     store.event('handoff_validation_denied', {'task': task['id'], 'reason': str(exc)})
                     continue
@@ -229,6 +295,28 @@ async def run_task(engine, task):
                         raise PolicyError('encoded read page exceeds observation budget; reduce length')
                 elif op in ('write', 'append'):
                     data = action["data"]
+                    path = action['path']
+                    if (task['stage'] in ('INTAKE', 'REVIEW') and path in conf.get('deliverables', []) and
+                            (action.get('more', False) or path in structured_chunks)):
+                        if not isinstance(data, str):
+                            raise PolicyError('structured chunks require text; use object data only for complete documents')
+                        if op == 'append' and path not in structured_chunks:
+                            raise PolicyError('structured append requires a staged first write')
+                        data = (structured_chunks.get(path, '') if op == 'append' else '') + data
+                        if len(data.encode('utf-8')) > broker.max_bytes:
+                            raise PolicyError('write exceeds file limit')
+                        if action.get('more', False):
+                            # Stage JSON fragments in memory. Nothing is written until
+                            # the complete document passes the existing schema check.
+                            structured_chunks[path] = data
+                            partial.add(path)
+                            last = canonical({'staged': path, 'bytes': len(data.encode('utf-8')),
+                                              'more': True, 'written_bytes': 0})
+                            last_observation = last
+                            store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                                        'op': op, 'path_or_name': path, 'receipt': last})
+                            continue
+                        op = 'write'
                     if task['stage'] == 'CODER' and action['path'] == handoff:
                         try:
                             if op != 'write' or action.get('more', False):
@@ -237,16 +325,18 @@ async def run_task(engine, task):
                         except ValueError as exc:
                             coder_handoff_errors += 1
                             if coder_handoff_errors >= 3:
-                                raise RuntimeError('coder_handoff_exhausted:' + str(exc)) from exc
+                                raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc)) from exc
                             raise PolicyError('CODER handoff schema: ' + str(exc) +
                                               '. Rewrite the complete handoff object; then finish.') from exc
-                    if 'more' in action and task['stage'] != 'CODER':
-                        raise PolicyError('chunk marker more is only supported for CODER')
                     if task['stage'] == 'INTAKE' and action['path'] in conf.get('deliverables', []):
                         try:
                             if op != 'write':
                                 raise PolicyError('INTAKE schema: use write for the complete JSON document, not append')
-                            data = intake_document(data)
+                            def spec_read(source):
+                                if source != plan['spec']:
+                                    raise PolicyError('INTAKE pointer: source must be project specification')
+                                return source_read(source)
+                            data = intake_document(data, spec_read)
                         except PolicyError:
                             intake_format_errors += 1
                             if intake_format_errors >= 3:
@@ -262,13 +352,23 @@ async def run_task(engine, task):
                                               '; counterexamples must contain at least one nonempty ATTEMPTED test case even if no bug was found; observations and unresolved must be lists. Rewrite the complete report.')
                     if isinstance(data, (dict, list)):
                         data = canonical(data) + "\n"
+                    intake_target = task['stage'] == 'INTAKE' and path in conf.get('deliverables', [])
+                    if intake_target:
+                        from .verifier import Verifier
+                        target = confined(root, path)
+                        if (target.is_file() and target.read_bytes() == data.encode('utf-8') and
+                                not Verifier(root).intake(path, plan['spec'])):
+                            raise PolicyError(INTAKE_COMPLETE)
                     count = write_checkpoint(action['path'], data, op == 'append')
+                    structured_chunks.pop(action['path'], None)
                     finish_feedback = ''
                     if action.get('more', False):
                         partial.add(action['path'])
                     else:
                         partial.discard(action['path'])
                     last = canonical({'more': action.get('more', False), 'written': action['path'], 'bytes': count, 'sha256': checkpoints[action['path']]})
+                    if intake_target and not Verifier(root).intake(path, plan['spec']):
+                        last += '\n' + INTAKE_COMPLETE
                 elif op == 'command':
                     if action['name'] not in conf.get('commands', {}):
                         raise PolicyError('command not allowed')

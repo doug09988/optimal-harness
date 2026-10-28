@@ -45,7 +45,7 @@ def make_brief(role: str, plan: dict, notes: str = "", source_stage: str = "") -
         "deliverables": conf.get("deliverables", []),
         "commands": sorted(conf.get("commands", {}).keys()),
         "notes_verbatim": notes, "prior_stage": source_stage,
-        "budget": conf.get("budget", {}),
+        "budget": conf.get("budget", {}), "obligations": plan.get("obligations", []),
     }
 
 
@@ -88,6 +88,9 @@ class Engine:
             path = confined(root, f"vault/charters/{role.lower()}.md")
             atomic_write(path, role_text(role).encode())
         plan["charter_hashes"] = {f"vault/charters/{r.lower()}.md": digest(confined(root, f"vault/charters/{r.lower()}.md")) for r in plan["stages"]}
+        from .obligations import extract
+        plan['obligations'] = extract(confined(root, plan['spec']).read_text())
+        atomic_write(confined(root, 'vault/obligations.json'), (canonical(plan['obligations']) + '\n').encode())
         self.store.add_project(project, root, plan, make_brief("INTAKE", plan))
         return project
 
@@ -252,10 +255,46 @@ class Engine:
                  if t['cycle'] == cycle and t['status'] == 'SUCCEEDED'}
         for cp in self.store.checkpoints(project):
             if cp['task'] in tasks and cp['path'].endswith('/handoff.json'):
-                checks.append({'type': 'discrepancy-free', 'path': cp['archive'], 'key': 'open_discrepancies'})
+                checks.append({'type': 'obligation-discrepancy-free', 'path': cp['archive'], 'key': 'open_discrepancies',
+                               'obligations': self.store.project(project)['plan'].get('obligations', [])})
             if cp['task'] in tasks and tasks[cp['task']]['stage'] == 'REVIEW' and cp['path'].endswith('.json') and not cp['path'].startswith('vault/'):
                 checks.append({'type': 'discrepancy-free', 'path': cp['archive'], 'key': 'unresolved'})
         return checks
+
+    def _obligation_errors(self, project, plan, root):
+        from .obligations import errors
+        cycle = self.store.project(project)['cycle']
+        tasks = {t['id']: t for t in self.store.tasks(project)
+                 if t['cycle'] == cycle and t['status'] == 'SUCCEEDED'}
+        handoffs = []
+        for cp in self.store.checkpoints(project):
+            if cp['task'] in tasks and cp['path'].endswith('/handoff.json'):
+                task = tasks[cp['task']]
+                doc = json.loads(confined(root, cp['archive']).read_text())
+                from .obligations import resolutions
+                def source_read(source):
+                    # Do not grant new read authority through obligation evidence.
+                    broker = FileBroker(root, task['brief']['permitted_reads'], [])
+                    chunks, offset = [], 0
+                    while True:
+                        text = broker.read(source, offset)
+                        if not text:
+                            return ''.join(chunks)
+                        chunks.append(text)
+                        offset += len(text.encode('utf-8'))
+                try:
+                    doc['obligation_resolutions'] = resolutions(doc.get('obligation_resolutions', []),
+                        plan.get('obligations', []), doc.get('open_discrepancies', []), source_read)
+                except (ValueError, PolicyError, OSError):
+                    doc['obligation_resolutions'] = []
+                handoffs.append((task['stage'], doc))
+        return errors(plan.get('obligations', []), handoffs)
+
+    def _apply_obligations(self, result, project, plan, root):
+        for error in self._obligation_errors(project, plan, root):
+            result['results'].append({'type': 'obligation', 'passed': False, 'error': error})
+            result['passed'] = False
+            result['open_discrepancies'] += 1
 
     def _gate(self, project: str, plan: dict, root: Path) -> None:
         errors = self.integrity_errors(project, root)
@@ -272,6 +311,7 @@ class Engine:
                 checks.append({"type": "command_receipt", "path": command["capture"]})
         verifier = Verifier(root, private.parent)
         result = verifier.verify(checks)
+        self._apply_obligations(result, project, plan, root)
         result["receipt_pointers"] = self._record_verifier_receipts(project, root, verifier.receipts)
         self.store.event("satisfiability_gate", {"project": project, "report": result})
         if any("sandbox could not establish isolation" in str(r["error"]) or
@@ -312,6 +352,7 @@ class Engine:
                 checks.append({"type": "command_receipt", "path": command["capture"]})
         verifier = Verifier(Path(p["root"]), private.parent)
         report = verifier.verify(checks)
+        self._apply_obligations(report, project, p['plan'], Path(p['root']))
         report["receipt_pointers"] = self._record_verifier_receipts(project, Path(p["root"]), verifier.receipts)
         self.store.event("pre_grade_recheck", {"project": project, "report": report})
         if not report["passed"]:
