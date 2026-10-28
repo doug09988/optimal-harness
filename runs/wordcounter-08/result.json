@@ -1,0 +1,28 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "97789b4a825440f4",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "intake_spec_gaps:intake slots must exactly equal pinned lifecycle matrix"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 24,
+    "head": "0b7f7c7bc14ab9a0c536370d1c1861b0a781c496a87ec2a0fcc18d5b0455500b"
+  },
+  "integrity_errors": [
+    "modified-after-checkpoint:vault/runs/97789b4a825440f4/a1/handoff.json"
+  ]
+}

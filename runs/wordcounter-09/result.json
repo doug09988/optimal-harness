@@ -1,0 +1,35 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "66991a87754c42f3",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "fb5bb35bb1cb4ecf",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "review_missing_counterexample_pass_or_schema"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 46,
+    "head": "c53281af57032ed9ea2a96de2ea8a34194859fad1fb5bee7baa7dae66cf9641b"
+  },
+  "integrity_errors": [
+    "modified-after-checkpoint:vault/runs/fb5bb35bb1cb4ecf/a1/handoff.json"
+  ]
+}

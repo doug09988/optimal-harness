@@ -1,0 +1,29 @@
+# STAGE-01 — FIXER: fix the wedged-generation deadline test
+
+Role: FIXER. The coordinator (Doofy) verifies your output independently.
+Work only inside ~/optimal-harness. State on disk: SPEC.md (spec),
+BUILD-REPORT.md (progress so far), runs/ (logs). Read only what this
+task needs.
+
+TASK: The suite has exactly one erroring test on /usr/bin/python3
+(3.9): tests/test_model.py, ModelTests.test_deadline_kills_wedged_http_generation.
+It fails with an asyncio event-loop RuntimeError around the
+asyncio.run(...) call near line 72. Diagnose the real cause from the
+code and fix it so the test passes on Python 3.9, WITHOUT weakening
+what it asserts: a wedged HTTP generation must still be detected and
+killed by the deadline. Smallest change that is actually correct —
+test code or model code, whichever is truly at fault.
+
+VERIFY YOURSELF, in ~/optimal-harness:
+  PYTHONDONTWRITEBYTECODE=1 TMPDIR="$PWD/runs" python3 -m unittest tests.test_model -v
+  PYTHONDONTWRITEBYTECODE=1 TMPDIR="$PWD/runs" python3 -m unittest discover -s tests
+Both green when you finish; if not, state exactly which tests fail
+and why.
+
+WRITE stages/STAGE-01-result.md: root cause (2-4 sentences), files
+changed (paths only), exact final outcomes of both test commands
+(pass/fail counts), any remaining known issue.
+
+RULES: Never modify ~/harness, ~/vault, or anything outside
+~/optimal-harness. No installs; standard library only. Honest
+failure is a successful stage; invented success is not.

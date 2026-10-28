@@ -1,0 +1,28 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "7af575ed2de1435c",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "citation_check_failed:artifacts/intake.json: non-verbatim quote or missing because-clause"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 24,
+    "head": "822c839eb1d863c8f8d3aac015fa2b9e5a47e5a36ee5d943f5d5f91172870cfa"
+  },
+  "integrity_errors": [
+    "modified-after-checkpoint:vault/runs/7af575ed2de1435c/a1/handoff.json"
+  ]
+}

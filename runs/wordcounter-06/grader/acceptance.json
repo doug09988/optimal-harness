@@ -1,0 +1,13 @@
+{
+  "checks": [
+    {"type":"intake", "path":"artifacts/intake.json", "source":"spec.md"},
+    {"type":"exists", "path":"wordfreq.py"},
+    {"type":"exists", "path":"test_unit.py"},
+    {"type":"exists", "path":"test_acceptance.py"},
+    {"type":"command_receipt", "path":"reports/integration.json"},
+    {"type":"command_receipt", "path":"reports/qa.json"},
+    {"type":"sandbox_acceptance", "test_file":"grader_hidden_test.py",
+     "argv":["python3","-m","unittest","-v","grader_hidden_test"],
+     "reads":["wordfreq.py"], "timeout_seconds":20}
+  ]
+}

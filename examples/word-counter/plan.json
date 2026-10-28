@@ -1,0 +1,55 @@
+{
+  "id": "wordcounter",
+  "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+  "spec": "spec.md",
+  "immutable_inputs": ["fixtures/words.json"],
+  "implementation_paths": ["wordfreq.py", "test_unit.py"],
+  "qa_test_paths": ["test_acceptance.py"],
+  "stages": {
+    "INTAKE": {
+      "reads": ["spec.md"],
+      "writes": ["artifacts/intake.json"],
+      "deliverables": ["artifacts/intake.json"]
+    },
+    "CODER": {
+      "reads": ["spec.md", "fixtures/words.json"],
+      "writes": ["wordfreq.py", "test_unit.py"],
+      "deliverables": ["wordfreq.py", "test_unit.py"]
+    },
+    "INTEGRATOR": {
+      "reads": ["spec.md", "wordfreq.py", "test_unit.py", "fixtures/words.json"],
+      "writes": ["artifacts/integration_notes.md"],
+      "deliverables": ["artifacts/integration_notes.md", "reports/integration.json"],
+      "commands": {
+        "suite": {
+          "argv": ["python3", "-m", "unittest", "-v", "test_unit"],
+          "reads": ["wordfreq.py", "test_unit.py", "fixtures/words.json"],
+          "capture": "reports/integration.json", "timeout_seconds": 20
+        }
+      }
+    },
+    "QA": {
+      "reads": ["spec.md"],
+      "writes": ["test_acceptance.py"],
+      "command_only": ["wordfreq.py"],
+      "deliverables": ["test_acceptance.py", "reports/qa.json"],
+      "commands": {
+        "acceptance": {
+          "argv": ["python3", "-m", "unittest", "-v", "test_acceptance"],
+          "reads": ["wordfreq.py", "test_acceptance.py"],
+          "capture": "reports/qa.json", "timeout_seconds": 20
+        }
+      }
+    },
+    "FIXER": {
+      "reads": ["spec.md", "wordfreq.py", "test_unit.py", "reports/qa.json", "reports/integration.json"],
+      "writes": ["wordfreq.py"],
+      "deliverables": ["wordfreq.py"]
+    },
+    "REVIEW": {
+      "reads": ["spec.md", "artifacts/intake.json", "wordfreq.py", "test_unit.py", "artifacts/integration_notes.md", "reports/integration.json", "test_acceptance.py", "reports/qa.json"],
+      "writes": ["artifacts/review.json"],
+      "deliverables": ["artifacts/review.json"]
+    }
+  }
+}
