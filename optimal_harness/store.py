@@ -67,6 +67,10 @@ class Store:
                     project TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL,
                     body TEXT NOT NULL, PRIMARY KEY(project,stage)
                 );
+                CREATE TABLE IF NOT EXISTS fixer_progress (
+                    project TEXT NOT NULL, stage TEXT NOT NULL, body TEXT NOT NULL,
+                    PRIMARY KEY(project,stage)
+                );
                 CREATE TABLE IF NOT EXISTS integrator_progress (
                     project TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL,
                     body TEXT NOT NULL, PRIMARY KEY(project,stage)
@@ -278,6 +282,23 @@ class Store:
             c.execute('INSERT OR REPLACE INTO coder_progress VALUES(?,?,?,?)',
                       (task['project_id'], task['stage'], input_hash, canonical(body)))
         self.commit(task, effect)
+
+    def load_fixer_progress(self, task):
+        with self.transaction() as c:
+            self._assert(c, task)
+            row = c.execute('SELECT body FROM fixer_progress WHERE project=? AND stage=?',
+                            (task['project_id'], task['stage'])).fetchone()
+            return json.loads(row['body']) if row else None
+
+    def save_fixer_progress(self, task, body, connection=None):
+        def effect(c):
+            c.execute('INSERT OR REPLACE INTO fixer_progress VALUES(?,?,?)',
+                      (task['project_id'], task['stage'], canonical(body)))
+        if connection is None:
+            self.commit(task, effect)
+        else:
+            self._assert(connection, task)
+            effect(connection)
 
     def load_integrator_progress(self, task, input_hash):
         with self.transaction() as c:

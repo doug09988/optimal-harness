@@ -79,7 +79,7 @@ class RealPipeline(unittest.TestCase):
                         'test_empty', QA_BODY, 'PASS\nEmpty input acceptance test passed.', *review('QA')]
             def fix(prompt):
                 self.assertIn('independent acceptance failed:',prompt)
-                return write('wordfreq.py',CODE)
+                return 'wordfreq.py :: correct case-sensitive counting'
             # Initial implementation intentionally lowercases strings: unit/QA happy
             # paths pass, independently hidden case-sensitive tests genuinely fail.
             wrong=CODE.replace('counts=Counter(data)','counts=Counter(x.lower() for x in data)')
@@ -91,7 +91,7 @@ class RealPipeline(unittest.TestCase):
                 return write('artifacts/intake.json', json.dumps(audit))
             actions=([{'action': 'invalid_' + str(i)} for i in range(3)] if retry else []) + [retry_intake if retry else write('artifacts/intake.json',json.dumps(audit)),handoff,finish,*review('INTAKE'),
                      'wordfreq.py :: implementation\ntest_unit.py :: tests',wrong,UNIT,'["disallowed"]',*review('CODER'),
-                     *integration_and_qa(),fix,handoff,finish,*review('FIXER'),*integration_and_qa()]
+                     *integration_and_qa(),fix,CODE,*review('FIXER'),*integration_and_qa()]
             store=Store(base/'board.db'); engine=Engine(store,FakeQueue(actions),lease_seconds=120)
             engine.submit(root,plan,grader/'acceptance.json')
             asyncio.run(engine.serve(1))

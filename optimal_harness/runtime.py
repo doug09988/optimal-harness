@@ -14,6 +14,7 @@ from .review import DrivenReview
 from .qa import DrivenQA
 from .coder import DrivenCoder
 from .integrator import DrivenIntegrator
+from .fixer import DrivenFixer
 
 
 
@@ -149,7 +150,7 @@ async def run_task(engine, task):
                 engine._checkpoint(root, task, path, checkpoints, 'trusted_report', c)
         store.commit(task, effect, allow_report=True)
 
-    def write_checkpoint(path, data=None, append=False, chunks=None):
+    def write_checkpoint(path, data=None, append=False, chunks=None, on_checkpoint=None):
         def effect(c):
             count = None
             if data is not None:
@@ -164,6 +165,8 @@ async def run_task(engine, task):
                 else:
                     count = broker.write(path, data, append=append)
             engine._checkpoint(root, task, path, checkpoints, 'runtime', c)
+            if on_checkpoint is not None:
+                on_checkpoint(c)
             return count
         return store.commit(task, effect)
 
@@ -252,6 +255,7 @@ async def run_task(engine, task):
             # trust an uncheckpointed on-disk file merely because it exists.
             for path, body in coder.bodies.items():
                 write_checkpoint(path, body, chunks=storage_chunks(body))
+        fixer = DrivenFixer() if task['stage'] == 'FIXER' else None
         integrator = DrivenIntegrator() if task['stage'] == 'INTEGRATOR' else None
         while True:
             store.assert_lease(task)
@@ -271,7 +275,10 @@ async def run_task(engine, task):
                 last_observation = last
                 store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                             'op': 'command', 'path_or_name': name, 'receipt': last})
-            if integrator is not None:
+            if fixer is not None:
+                action = await fixer.run(engine, task, plan, root, conf, ledger, manifest,
+                                         broker, write_checkpoint, storage_chunks, checkpoints)
+            elif integrator is not None:
                 action = await integrator.run(engine, task, plan, root, conf, ledger, manifest,
                                               broker, write_checkpoint, storage_chunks, execute_command,
                                               trusted_write, evidence, checkpoints)

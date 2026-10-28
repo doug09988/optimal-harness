@@ -184,7 +184,8 @@ class RuntimeTests(unittest.TestCase):
                     value = value(prompt)
                 return Completion(value if isinstance(value, str) else json.dumps(value), 100, 80, 30)
         self.engine.queue = Queue(actions)
-        with patch.object(self.engine, '_advance'):
+        # Isolate legacy action-loop protocol tests from the driven FIXER.
+        with patch.object(self.engine, '_advance'), patch('optimal_harness.runtime.DrivenFixer', return_value=None):
             asyncio.run(self.engine.run_task(task))
         return self.store.tasks('wordcounter')[0]
 
