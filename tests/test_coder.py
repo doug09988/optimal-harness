@@ -41,6 +41,27 @@ class CoderTests(unittest.TestCase):
         with self.store.transaction() as c:
             self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='oversized_accepted_split'").fetchone()[0], 1)
 
+    def test_sanitized_plan_completes_without_retry(self):
+        task = self.run_driven(['README.md :: docs\n./wordfreq.py :: implementation\n'
+                                'wordfreq.py :: duplicate\ntest_unit.py :: tests',
+                                '# impl', '# tests', '["disallowed"]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(task['attempts'], 1)
+        self.assertEqual(self.engine.queue.calls, 4)
+        self.assertEqual((self.root/'wordfreq.py').read_text(), '# impl')
+        with self.store.transaction() as c:
+            events = [json.loads(row[0]) for row in c.execute(
+                "SELECT payload FROM events WHERE kind='plan_entry_dropped'")]
+        self.assertEqual([event['path'] for event in events], ['README.md', 'wordfreq.py'])
+        self.assertTrue(all(event['reason'] for event in events))
+        self.assertFalse((self.root/'README.md').exists())
+
+    def test_only_off_allowlist_plan_is_model_error(self):
+        task = self.run_driven(['README.md :: docs'] * 2)
+        self.assertIn('coder_action_format_exhausted:plan', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertEqual(self.engine.queue.calls, 2)
+
     def test_unwritable_attempts_remaining_files_then_model_error(self):
         def remaining(prompt):
             self.assertIn('FILE: test_unit.py', prompt)
@@ -142,7 +163,7 @@ class CoderTests(unittest.TestCase):
 
     @staticmethod
     def plan_text():
-        return 'wordfreq.py :: implementation\ntest_unit.py :: tests\nextra.txt :: data'
+        return 'README.md :: docs\n./wordfreq.py :: implementation\nwordfreq.py :: duplicate\ntest_unit.py :: tests\nextra.txt :: data'
 
     def test_resume_after_two_of_three_files(self):
         calls = self.attempts()

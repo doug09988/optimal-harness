@@ -107,9 +107,23 @@ class FixerTests(unittest.TestCase):
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual([cap for _, cap in self.calls], [512, 4096, 4096])
 
+    def test_fallback_sanitizes_plan_without_retry(self):
+        self.setup_task(structured=False)
+        task = self.attempt(['README.md :: docs\n./wordfreq.py :: fix counts\n'
+                             'wordfreq.py :: duplicate', '# fixed'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(task['attempts'], 1)
+        self.assertEqual([cap for _, cap in self.calls], [512, 4096])
+        self.assertEqual((self.root/'wordfreq.py').read_text(), '# fixed')
+        with self.store.transaction() as c:
+            events = [json.loads(row[0]) for row in c.execute(
+                "SELECT payload FROM events WHERE kind='plan_entry_dropped'")]
+        self.assertEqual([event['path'] for event in events], ['README.md', 'wordfreq.py'])
+        self.assertTrue(all(event['reason'] for event in events))
+
     def test_fallback_resume_skips_plan_and_applied_item(self):
         self.setup_task(structured=False)
-        self.attempt(['wordfreq.py :: fix counts\ntest_unit.py :: fix regression',
+        self.attempt(['README.md :: docs\n./wordfreq.py :: fix counts\nwordfreq.py :: duplicate\ntest_unit.py :: fix regression',
                       '# first', RuntimeError('model_request_killed_on_deadline')])
         task = self.attempt(['# second'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
@@ -128,7 +142,7 @@ class FixerTests(unittest.TestCase):
         self.setup_task(structured=False)
         task = self.attempt(['test_acceptance.py :: weaken test'] * 2)
         self.assertIn('fixer_action_format_exhausted:plan', task['failure'])
-        self.assertIn('QA acceptance file is uneditable', task['failure'])
+        self.assertIn('empty fix list', task['failure'])
         self.assertEqual([cap for _, cap in self.calls], [512, 512])
         self.assertFalse((self.root/'test_acceptance.py').exists())
 
@@ -138,7 +152,9 @@ class FixerTests(unittest.TestCase):
             task = self.store.tasks('wordcounter')[-1]
             return 'vault/runs/' + task['id'] + '/a1/handoff.json :: override handoff'
         task = self.attempt([bad_plan, bad_plan])
-        self.assertIn('fix target not on declared write allowlist', task['failure'])
+        self.assertIn('fixer_action_format_exhausted:plan', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertIn('empty fix list', task['failure'])
 
     def test_item_envelope_reasked_with_current_content(self):
         self.setup_task()

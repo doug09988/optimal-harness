@@ -1,6 +1,7 @@
 """Runtime-owned, resumable corrections of the requested files only."""
 import hashlib
 import json
+from .coder import sanitize_plan
 from .policy import PolicyError, confined, normalized
 from .store import canonical
 
@@ -139,6 +140,9 @@ class DrivenFixer:
                         if not sep:
                             raise PolicyError('plan requires path :: change')
                         fixes.append([path.strip(), change.strip()])
+                    fixes = list(map(list, sanitize_plan(
+                        fixes, allowed,
+                        lambda entry: store.event('plan_entry_dropped', entry)).items()))
                     validate(fixes)
                     state['items'] = fixes
                     save()
