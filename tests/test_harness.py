@@ -234,22 +234,22 @@ class HarnessTest(unittest.TestCase):
             return write(match.group(), json.dumps({"status": "ready", "open_discrepancies": [], "summary": "Checkpointed."}))
 
         def review(stage):
-            return write("artifacts/review.json", json.dumps({"reviewed_stage": stage,
-                "counterexamples": ["Try a missing input file"], "observations": [], "unresolved": []}))
+            return [write("artifacts/review.json", {key: value}) for key, value in {"reviewed_stage": stage,
+                "counterexamples": ["Try a missing input file"], "observations": [], "unresolved": []}.items()]
 
         finish = {"action": "finish", "summary": "All declared artifacts were written."}
         actions = [
             write("artifacts/intake.json", json.dumps(audit)), handoff, finish,
-            review("INTAKE"), handoff, finish,
+            *review("INTAKE"), handoff, finish,
             write("wordfreq.py", "import sys\nprint('placeholder only in mocked test')\n"),
             write("test_unit.py", "import unittest\n"), handoff, finish,
-            review("CODER"), handoff, finish,
+            *review("CODER"), handoff, finish,
             write("artifacts/integration_notes.md", "Wiring inspected."),
             {"action": "command", "name": "suite"}, handoff, finish,
-            review("INTEGRATOR"), handoff, finish,
+            *review("INTEGRATOR"), handoff, finish,
             write("test_acceptance.py", "import unittest\n"),
             {"action": "command", "name": "acceptance"}, handoff, finish,
-            review("QA"), handoff, finish,
+            *review("QA"), handoff, finish,
         ]
         queue = FakeQueue(actions)
         engine = Engine(self.store, queue)
@@ -264,7 +264,7 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(self.store.project("wordcounter")["status"], "AWAITING_COORDINATOR")
         self.assertEqual(len(self.store.tasks("wordcounter")), 8)
         self.assertTrue(all(t["status"] == "SUCCEEDED" for t in self.store.tasks("wordcounter")))
-        self.assertEqual(queue.calls, 27)
+        self.assertEqual(queue.calls, 39)
         self.assertTrue(self.store.audit()["valid"])
         with patch("optimal_harness.verifier.sandbox_command", side_effect=mocked_sandbox):
             engine.coordinator_verdict("wordcounter", True, "Ground truth graded independently; accepted.")

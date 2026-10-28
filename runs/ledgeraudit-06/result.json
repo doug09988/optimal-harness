@@ -1,0 +1,26 @@
+{
+  "project": [
+    {
+      "id": "ledgeraudit",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "bd3ec92de4b0415c",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "error:no_progress:repeated_action"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 38,
+    "head": "c61d0a725c943eaa83a993766b24a05b43fe24052f1772713e1b064aab67c9ba"
+  },
+  "integrity_errors": []
+}

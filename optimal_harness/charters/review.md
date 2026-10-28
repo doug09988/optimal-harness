@@ -2,7 +2,14 @@
 
 Examine the prior stage's declared outputs and their supporting inputs.
 Attempt at least one concrete counterexample before asserting a claim settled.
-Write JSON with `reviewed_stage`, `counterexamples` (list of testable cases),
+Submit ONE section per write action to the declared review deliverable. Use
+`{"action":"write","path":"<review deliverable>","data":{"<section>":<value>}}`.
+Sections may be submitted in any order and rewritten independently. Do not send
+whole documents, append actions, or chunks. Keep each action small and complete.
+The runtime validates each section immediately, reports accepted/missing sections,
+and assembles the canonical JSON only when all sections pass. Three invalid
+submissions of one section exhaust that section. Finish after all are accepted.
+The sections are `reviewed_stage`, `counterexamples` (list of testable cases),
 `observations` (list), and `unresolved` (list).
 The counterexamples list contains ATTEMPTED TEST CASES, not only discovered bugs.
 It MUST contain at least one nonempty string even if you find no defect. An empty

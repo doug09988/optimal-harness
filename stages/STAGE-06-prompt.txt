@@ -1,0 +1,52 @@
+# STAGE-06 — Section-composed REVIEW documents (fixer)
+
+Role: FIXER. Branch: codex/stage-06-review-sections, cut from
+codex/stage-05b-intake-recovery. Sandbox rules as before:
+.git read-only (no commits; leave the worktree complete), no
+model endpoint access, stdlib only, never modify
+examples/graders, ~/harness, ~/vault.
+
+DEFECT (coordinator-verified, two consecutive live runs
+wordcounter-verify-05 and -06 on stage-5/5B code): INTAKE now
+passes (05B fix holds, 2/2), but REVIEW fails both times with
+review_action_format_exhausted. Stage 5 moved REVIEW to
+whole-document in-memory staging: one large JSON, all-or-
+nothing schema validation, three strikes total. Observed
+behavior: the worker re-reads its inputs, emits multi-object
+responses (extras discarded), produces oversized or schema-
+invalid documents (e.g. missing a nonempty counterexamples
+entry), and cannot converge in three whole-doc attempts.
+Pre-stage-5 (verify-03), REVIEW passed with on-disk writes
+and finish-time checks. Unit tests all pass; this is a live
+interaction-contract failure, same family as the stage-5
+INTAKE loop that 05B fixed with localized feedback.
+
+FIX — section composition for REVIEW:
+1. The runtime defines the review document as named sections
+(matching the existing review schema's top-level fields).
+The worker submits ONE section per write action (small,
+bounded); each section is validated immediately against its
+own schema fragment and the worker gets section-specific
+feedback. Sections may be rewritten independently.
+2. The runtime assembles the canonical review JSON from the
+accepted sections and writes it; the assembled document must
+pass the SAME full schema validation as today before the
+stage can finish. No gate is weakened.
+3. Retry budget is per section (3 invalid submissions of one
+section), then a named error:
+review_section_exhausted:<section>. Whole-document staging
+for REVIEW is removed.
+4. Update the review charter to teach the section workflow
+(one section at a time; the counterexamples section must
+contain at least one ATTEMPTED case even when no defect is
+found — state this in the charter AND in the section's
+validation feedback).
+5. Leave INTAKE exactly as it is (it passes live). If another
+role shares REVIEW's whole-doc staging pattern, name it in
+your result but do not change it.
+
+TESTS: per-section validation + feedback content, independent
+section rewrite, assembly passes full schema, per-section
+exhaustion naming, scripted pipeline still green, full suite
+green. DELIVERABLE: code + tests + stages/STAGE-06-result.md
+with exact sandbox outcomes; no live claims.

@@ -9,6 +9,7 @@ from .model import SYSTEM_PREFIX, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
+from .review import SECTIONS, validate_section, validate_document
 
 
 
@@ -97,6 +98,17 @@ async def run_task(engine, task):
     intake_format_errors = 0
     partial = set()
     structured_chunks = {}
+    review_sections = {}
+    review_errors = {}
+
+    def review_reject(section, reason):
+        review_errors[section] = review_errors.get(section, 0) + 1
+        if review_errors[section] >= 3:
+            raise RuntimeError("review_section_exhausted:" + section)
+        return "REVIEW section " + section + ": " + reason + "; invalid submissions=" + str(review_errors[section])
+
+    def next_review_section():
+        return next((key for key in SECTIONS if key not in review_sections), SECTIONS[0])
     action_format_errors = 0
     coder_handoff_errors = 0
     finish_feedback = ''
@@ -183,13 +195,26 @@ async def run_task(engine, task):
                 next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
             if ledger.calls == 0 and plan['spec'] in task['brief']['permitted_reads']:
                 next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
+            if task['stage'] == 'REVIEW' and missing:
+                next_step = ('Write ONE review section to ' + missing[0] + ', data={' +
+                             canonical(next_review_section()) + ': <section value>}; accepted sections are retained')
             if finish_feedback:
                 next_step = finish_feedback
             prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
             prompt += '\nCompleted model calls in this attempt: ' + str(ledger.calls)
             if last.startswith('{') and '"content":' in last:
                 prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
-            prompt += '\nCHUNK RULE: ' + chunk_feedback
+            if task['stage'] == 'REVIEW':
+                next_step = next_review_section()
+                prompt += ('\nREVIEW SECTION WORKFLOW: Submit ONE named section per write, data={"<section>": <value>}, '
+                           'more=false; no append or whole-document chunks. Each action is bounded to ' + str(chunk_limit) +
+                           ' UTF-8 bytes. Accepted sections may be rewritten independently. '
+                           'counterexamples must contain at least one nonempty ATTEMPTED case even when no defect is found. '
+                           'Accepted=' + canonical(list(review_sections)) + '; missing=' +
+                           canonical([key for key in SECTIONS if key not in review_sections]) +
+                           '; next section=' + next_step + '; finish after all sections are accepted.')
+            else:
+                prompt += '\nCHUNK RULE: ' + chunk_feedback
             cap, timeout = ledger.reserve(prompt, SYSTEM_PREFIX)
             store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
                         'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
@@ -211,6 +236,7 @@ async def run_task(engine, task):
                 raise RuntimeError("circuit_breaker:board_attempt_budget")
             if ledger.seconds >= ledger.budget['max_seconds']:
                 raise RuntimeError('circuit_breaker:wall_clock_after_call')
+            first = ''
             try:
                 decoder = json.JSONDecoder()
                 _, end = decoder.raw_decode(result.text.lstrip())
@@ -225,6 +251,21 @@ async def run_task(engine, task):
                 # A bounded correction is fresh, not replay of malformed history.
                 last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
                         + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
+                if task['stage'] == 'REVIEW':
+                    section = next_review_section()
+                    try:
+                        candidate = json.loads(first)
+                        payload = candidate.get('data', {})
+                        if isinstance(payload, str):
+                            payload = json.loads(payload)
+                        if isinstance(payload, dict) and len(payload) == 1 and next(iter(payload)) in SECTIONS:
+                            section = next(iter(payload))
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+                    last = (review_reject(section, str(exc)) + '\nSubmit ONE small section per write; accepted sections are retained. '
+                            'counterexamples requires at least one nonempty ATTEMPTED case even when no defect is found.'
+                            '\nLAST SUCCESSFUL TOOL OBSERVATION:\n' + last_observation)
+                    continue
                 action_format_errors += 1
                 last = chunk_feedback + '\n' + last
                 if action_format_errors >= 3:
@@ -296,7 +337,7 @@ async def run_task(engine, task):
                 elif op in ('write', 'append'):
                     data = action["data"]
                     path = action['path']
-                    if (task['stage'] in ('INTAKE', 'REVIEW') and path in conf.get('deliverables', []) and
+                    if (task['stage'] == 'INTAKE' and path in conf.get('deliverables', []) and
                             (action.get('more', False) or path in structured_chunks)):
                         if not isinstance(data, str):
                             raise PolicyError('structured chunks require text; use object data only for complete documents')
@@ -342,14 +383,34 @@ async def run_task(engine, task):
                             if intake_format_errors >= 3:
                                 raise RuntimeError('intake_format_exhausted:three invalid documents; no artifact accepted')
                             raise
-                    if task['stage'] == 'REVIEW' and action['path'] in conf.get('deliverables', []):
-                        report = json.loads(data) if isinstance(data, str) else data
-                        if (not isinstance(report, dict) or report.get('reviewed_stage') != task['brief']['prior_stage'] or
-                            not isinstance(report.get('counterexamples'), list) or not report['counterexamples'] or
-                            any(not isinstance(case, str) or not case.strip() for case in report['counterexamples']) or
-                            not isinstance(report.get('observations'), list) or not isinstance(report.get('unresolved'), list)):
-                            raise PolicyError('REVIEW schema: reviewed_stage must be ' + task['brief']['prior_stage'] +
-                                              '; counterexamples must contain at least one nonempty ATTEMPTED test case even if no bug was found; observations and unresolved must be lists. Rewrite the complete report.')
+                    if task['stage'] == 'REVIEW' and path in conf.get('deliverables', []):
+                        section = next_review_section()
+                        try:
+                            payload = json.loads(data) if isinstance(data, str) else data
+                            if isinstance(payload, dict) and len(payload) == 1:
+                                key = next(iter(payload))
+                                if key in SECTIONS:
+                                    section = key
+                            if (op != 'write' or action.get('more', False) or
+                                    not isinstance(payload, dict) or len(payload) != 1 or
+                                    next(iter(payload)) not in SECTIONS):
+                                raise PolicyError('submit ONE named section per write, data={"<section>": <value>}; no chunks')
+                            validate_section(section, payload[section], task['brief']['prior_stage'])
+                            candidate = review_sections | {section: payload[section]}
+                            if len(candidate) == len(SECTIONS):
+                                validate_document(candidate, task['brief']['prior_stage'])
+                                write_checkpoint(path, canonical(candidate) + '\n')
+                            review_sections = candidate
+                        except (PolicyError, ValueError) as exc:
+                            raise PolicyError(review_reject(section, str(exc))) from exc
+                        finish_feedback = ''
+                        last = canonical({'accepted_section': section, 'accepted_sections': list(review_sections),
+                                          'missing_sections': [key for key in SECTIONS if key not in review_sections],
+                                          'assembled': path if len(review_sections) == len(SECTIONS) else None})
+                        last_observation = last
+                        store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                                    'op': op, 'path_or_name': path, 'receipt': last})
+                        continue
                     if isinstance(data, (dict, list)):
                         data = canonical(data) + "\n"
                     intake_target = task['stage'] == 'INTAKE' and path in conf.get('deliverables', [])

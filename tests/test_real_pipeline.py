@@ -64,7 +64,7 @@ class RealPipeline(unittest.TestCase):
                 return write(path,'{"status":"ready","open_discrepancies":[],"summary":"scripted test"}')
             finish={'action':'finish','summary':'scripted test'}
             def review(stage):
-                return [write('artifacts/review.json',json.dumps({'reviewed_stage':stage,'counterexamples':['missing input file'],'observations':[],'unresolved':[]})),handoff,finish]
+                return [*[write('artifacts/review.json', {key: value}) for key, value in {'reviewed_stage':stage,'counterexamples':['missing input file'],'observations':[],'unresolved':[]}.items()],handoff,finish]
             def integration_and_qa():
                 return [write('artifacts/integration_notes.md','Real suite command follows.'),{'action':'command','name':'suite'},handoff,finish,*review('INTEGRATOR'),
                         write('test_acceptance.py',QA),{'action':'command','name':'acceptance'},handoff,finish,*review('QA')]

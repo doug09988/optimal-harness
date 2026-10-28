@@ -67,7 +67,7 @@ class RuntimeTests(unittest.TestCase):
                 task = self.run_coder([
                     {'action': 'write', 'path': 'never-created', 'data': 'x'*5000}
                 ] * 3, role=role)
-                self.assertIn(role.lower() + '_action_format_exhausted', task['failure'])
+                self.assertIn('review_section_exhausted:reviewed_stage' if role == 'REVIEW' else role.lower() + '_action_format_exhausted', task['failure'])
                 self.assertEqual(self.engine.queue.calls, 3)
                 self.assertFalse((self.root/'never-created').exists())
 
@@ -125,18 +125,86 @@ class RuntimeTests(unittest.TestCase):
         doc = json.loads((self.root/'artifacts/intake.json').read_text())
         self.assertEqual(doc['slots']['invocation']['quote'], text)
 
-    def test_review_chunks_validate_only_complete_document(self):
+    def test_review_sections_rewrite_feedback_and_full_assembly(self):
         target = self.plan['stages']['REVIEW']['deliverables'][0]
-        report = {'reviewed_stage': '', 'counterexamples': ['attempt missing input'],
-                  'observations': [], 'unresolved': []}
-        data = json.dumps(report)
+        def write(key, value):
+            return {'action': 'write', 'path': target, 'data': {key: value}}
+        def correction(prompt):
+            self.assertIn('ATTEMPTED test case even when no defect is found', prompt)
+            self.assertIn('accepted_sections', prompt)
+            self.assertFalse((self.root/target).exists())
+            return write('counterexamples', ['attempt missing input'])
+        def rewrite(prompt):
+            self.assertIn('accepted_section', prompt)
+            return write('observations', ['revised observation'])
         task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': data[:20], 'more': True},
-            {'action': 'append', 'path': target, 'data': data[20:], 'more': False},
-            {'action': 'finish', 'summary': 'reviewed counterexample', 'open_discrepancies': []},
+            write('reviewed_stage', ''), write('observations', ['original']),
+            write('counterexamples', []), correction, rewrite,
+            write('unresolved', []),
+            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []},
         ], role='REVIEW')
-        self.assertEqual(task['status'], 'SUCCEEDED')
-        self.assertEqual(json.loads((self.root/target).read_text()), report)
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        report = json.loads((self.root/target).read_text())
+        self.assertEqual(report, {'reviewed_stage': '', 'counterexamples': ['attempt missing input'],
+                                 'observations': ['revised observation'], 'unresolved': []})
+        from optimal_harness.review import validate_document
+        validate_document(report, '')
+
+    def test_review_independent_budgets_and_rewrite_after_assembly(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        def write(key, value):
+            return {'action': 'write', 'path': target, 'data': {key: value}}
+        def rejected_rewrite(prompt):
+            self.assertIn('REVIEW section counterexamples', prompt)
+            self.assertEqual(json.loads((self.root/target).read_text())['counterexamples'], ['attempt'])
+            return write('counterexamples', ['revised attempt'])
+        task = self.run_coder([
+            write('observations', {}), write('observations', None), write('observations', []),
+            write('unresolved', {}), write('unresolved', None), write('unresolved', []),
+            write('reviewed_stage', ''), write('counterexamples', ['attempt']),
+            write('counterexamples', []), rejected_rewrite,
+            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []},
+        ], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(json.loads((self.root/target).read_text())['counterexamples'], ['revised attempt'])
+
+    def test_review_oversized_section_has_own_budget(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        task = self.run_coder([
+            {'action': 'write', 'path': target, 'data': {'counterexamples': ['x' * 5000]}}
+        ] * 3, role='REVIEW')
+        self.assertIn('review_section_exhausted:counterexamples', task['failure'])
+        self.assertFalse((self.root/target).exists())
+
+    def test_review_section_schema_feedback(self):
+        from optimal_harness.review import validate_section
+        for key, value, expected in [('reviewed_stage', 'QA', "must equal 'CODER'"),
+                                     ('counterexamples', [], 'ATTEMPTED'),
+                                     ('counterexamples', [' '], 'nonempty'),
+                                     ('observations', {}, 'must be a list'),
+                                     ('unresolved', None, 'must be a list')]:
+            with self.subTest(key=key), self.assertRaisesRegex(PolicyError, expected):
+                validate_section(key, value, 'CODER')
+
+    def test_review_per_section_exhaustion(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        def write(key, value):
+            return {'action': 'write', 'path': target, 'data': {key: value}}
+        task = self.run_coder([write('counterexamples', []), write('observations', {}),
+                               write('counterexamples', ['']), write('observations', []),
+                               write('counterexamples', [' '])], role='REVIEW')
+        self.assertIn('review_section_exhausted:counterexamples', task['failure'])
+        self.assertFalse((self.root/target).exists())
+
+    def test_review_rejects_whole_document_and_chunks(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        task = self.run_coder([
+            {'action': 'write', 'path': target, 'data': {'observations': [], 'unresolved': []}},
+            {'action': 'write', 'path': target, 'data': '{', 'more': True},
+            {'action': 'append', 'path': target, 'data': '}'},
+        ], role='REVIEW')
+        self.assertIn('review_section_exhausted:reviewed_stage', task['failure'])
+        self.assertFalse((self.root/target).exists())
 
     def test_generated_handoff_exhaustion_reports_error_without_acceptance(self):
         task = self.run_coder([

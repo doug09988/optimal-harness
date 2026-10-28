@@ -1,0 +1,33 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "59e89ed418024863",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "9064b40d1f3b419a",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "review_action_format_exhausted:three invalid or oversized actions; use smaller chunks"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 57,
+    "head": "9c968faa2546718ca1fb3c5d02ca37a37ab7656f9d61a681f36464d3df919ba2"
+  },
+  "integrity_errors": []
+}

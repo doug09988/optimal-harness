@@ -189,12 +189,11 @@ class Engine:
                 raise RuntimeError("intake_spec_gaps:" + "; ".join(errors)[:600])
         if task["stage"] == "REVIEW":
             report = json.loads(confined(root, conf["deliverables"][0]).read_text())
-            if (not isinstance(report, dict) or report.get("reviewed_stage") != task["brief"]["prior_stage"] or
-                not isinstance(report.get("counterexamples"), list) or not report["counterexamples"] or
-                any(not isinstance(case, str) or not case.strip() for case in report['counterexamples']) or
-                not isinstance(report.get("observations"), list) or
-                not isinstance(report.get("unresolved"), list)):
-                raise RuntimeError("review_missing_counterexample_pass_or_schema")
+            from .review import validate_document
+            try:
+                validate_document(report, task['brief']['prior_stage'])
+            except PolicyError as exc:
+                raise RuntimeError("review_missing_counterexample_pass_or_schema") from exc
         for path, expected in checkpoints.items():
             if digest(confined(root, path)) != expected:
                 raise RuntimeError("modified-after-checkpoint:" + path)
