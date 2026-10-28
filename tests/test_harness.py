@@ -241,8 +241,9 @@ class HarnessTest(unittest.TestCase):
         actions = [
             write("artifacts/intake.json", json.dumps(audit)), handoff, finish,
             *review("INTAKE"),
-            write("wordfreq.py", "import sys\nprint('placeholder only in mocked test')\n"),
-            write("test_unit.py", "import unittest\n"), handoff, finish,
+            'wordfreq.py :: implementation\ntest_unit.py :: tests',
+            "import sys\nprint('placeholder only in mocked test')\n",
+            "import unittest\n", '["disallowed"]',
             *review("CODER"),
             write("artifacts/integration_notes.md", "Wiring inspected."),
             {"action": "command", "name": "suite"}, handoff, finish,

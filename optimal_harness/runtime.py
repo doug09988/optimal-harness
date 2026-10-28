@@ -12,6 +12,7 @@ from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
 from .review import DrivenReview
 from .qa import DrivenQA
+from .coder import DrivenCoder
 
 
 
@@ -107,6 +108,7 @@ async def run_task(engine, task):
     structured_chunks = {}
     review = DrivenReview(task['brief']['prior_stage']) if task['stage'] == 'REVIEW' else None
     qa = DrivenQA() if task['stage'] == 'QA' else None
+    coder = DrivenCoder() if task['stage'] == 'CODER' else None
     finish_template = canonical({'action': 'finish', 'summary': 'Describe completed work',
                                  'open_discrepancies': []})
 
@@ -115,7 +117,7 @@ async def run_task(engine, task):
         return canonical({'action': 'write', 'path': path, 'data': {'slots': {
             key: {'status': 'gap', 'detail': 'Describe the actual gap'} for key in LIFECYCLE}}})
 
-    raw_writer = task['stage'] in ('CODER', 'INTEGRATOR', 'FIXER')
+    raw_writer = task['stage'] in ('INTEGRATOR', 'FIXER')
 
     def raw_template(path, content='Small complete file or first chunk', more=True):
         return canonical({'action': 'write', 'path': path, 'format': 'raw', 'more': more}) + '\n---CONTENT---\n' + content
@@ -196,6 +198,18 @@ async def run_task(engine, task):
                     'containment': output.get('containment', 'test-double')}
         return await asyncio.to_thread(store.commit, task, command_effect)
 
+    def storage_chunks(data):
+        payload, chunks = data.encode('utf-8'), []
+        while payload:
+            end = min(chunk_limit, len(payload))
+            while end < len(payload) and payload[end] & 0xc0 == 0x80:
+                end -= 1
+            if not end:
+                raise PolicyError('storage chunk limit cannot hold a UTF-8 character')
+            chunks.append(payload[:end].decode('utf-8'))
+            payload = payload[end:]
+        return chunks
+
     try:
         if not engine._pins_intact(plan, root):
             raise PolicyError('pinned input or charter changed')
@@ -215,8 +229,24 @@ async def run_task(engine, task):
                 if confined(root, path).is_file() else None for path in sorted(inputs)
             }).encode()).hexdigest()
             qa.restore(store.load_qa_progress(task, input_hash))
+        if coder is not None:
+            intake_paths = set(plan['stages'].get('INTAKE', {}).get('deliverables', []))
+            broker.reads.update(intake_paths)
+            inputs = set(task['brief']['permitted_reads']) | {plan['spec']} | intake_paths
+            inputs.difference_update(conf.get('writes', []))
+            input_hash = hashlib.sha256(canonical({
+                path: hashlib.sha256(confined(root, path).read_bytes()).hexdigest()
+                if confined(root, path).is_file() else None for path in sorted(inputs)
+            }).encode()).hexdigest()
+            coder.restore(store.load_coder_progress(task, input_hash))
+            # Restore accepted bytes through the same broker/checkpoint path, never
+            # trust an uncheckpointed on-disk file merely because it exists.
+            for path, body in coder.bodies.items():
+                write_checkpoint(path, body, chunks=storage_chunks(body))
         while True:
             store.assert_lease(task)
+            if coder is not None and coder.current == 'check' and coder.unwritable:
+                raise RuntimeError('coder_action_format_exhausted:unwritable; ' + canonical(coder.unwritable))
             if qa is not None and qa.current == 'report' and qa.execution is None:
                 target = next(p for p in conf['deliverables'] if p.endswith('test_acceptance.py'))
                 write_checkpoint(target, qa.assembly())
@@ -289,6 +319,11 @@ async def run_task(engine, task):
                            if confined(root, path).is_file()}
                 prompt = qa.prompt(sources)
                 manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+            if coder is not None:
+                sources = {path: source_read(path) for path in sorted(inputs)
+                           if confined(root, path).is_file()}
+                prompt = coder.prompt(sources, conf['writes'], conf.get('deliverables', []))
+                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
             if raw_writer:
                 prompt = RawWritePrompt(prompt)
                 manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
@@ -297,6 +332,8 @@ async def run_task(engine, task):
                 cap = min(cap, review.completion_cap)
             if qa is not None:
                 cap = min(cap, qa.completion_cap)
+            if coder is not None:
+                cap = min(cap, coder.completion_cap)
             store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
                         'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
                         'completion_cap': cap})
@@ -317,7 +354,73 @@ async def run_task(engine, task):
                 raise RuntimeError("circuit_breaker:board_attempt_budget")
             if ledger.seconds >= ledger.budget['max_seconds']:
                 raise RuntimeError('circuit_breaker:wall_clock_after_call')
-            if qa is not None:
+            if coder is not None:
+                current = coder.current
+                try:
+                    if current == 'plan':
+                        coder.accept_plan(result.text, conf['writes'],
+                            [p for p in conf.get('deliverables', [])
+                             if p not in {cmd['capture'] for cmd in conf.get('commands', {}).values()}])
+                    elif current == 'check':
+                        try:
+                            argv = coder.argv(result.text)
+                            name = next((n for n, cmd in conf.get('commands', {}).items()
+                                         if cmd['argv'] == argv), None)
+                            if name is None:
+                                raise PolicyError('command not on existing executor allowlist')
+                        except PolicyError as exc:
+                            coder.execution.append({'status': 'skipped', 'reason': str(exc)})
+                            coder.phase = 'done'
+                        else:
+                            coder.command = name
+                            receipt = await execute_command(name)
+                            output = json.loads(confined(root, receipt['capture']).read_text())
+                            coder.execution.append(output)
+                            coder.phase = 'done' if output['exit_code'] == 0 else 'repair'
+                    elif current == 'repair':
+                        path, sep, content = result.text.partition('\n')
+                        if path not in coder.bodies or not sep or not content.strip():
+                            raise PolicyError('repair requires accepted path line followed by content')
+                        coder.repair_path = path
+                        coder.phase = 'repair_body'
+                    else:
+                        path = coder.repair_path if current == 'repair_body' else current.removeprefix('file:')
+                        body = result.text
+                        if not body.strip() or '\x00' in body:
+                            raise PolicyError('file content must be nonempty text without NUL')
+                        chunks = storage_chunks(body)
+                        count = write_checkpoint(path, body, chunks=chunks)
+                        if len(chunks) > 1:
+                            store.event('oversized_accepted_split', {'task': task['id'],
+                                'generation': task['generation'], 'op': 'write', 'path': path,
+                                'bytes': len(body.encode()), 'chunk_count': len(chunks), 'chunk_limit': chunk_limit})
+                        coder.bodies[path] = body
+                        store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                                    'op': 'write', 'path_or_name': path,
+                                    'receipt': canonical({'written': path, 'bytes': count, 'sha256': checkpoints[path]})})
+                        if current == 'repair_body':
+                            receipt = await execute_command(coder.command)
+                            coder.execution.append(json.loads(confined(root, receipt['capture']).read_text()))
+                            coder.phase = 'done'
+                    coder.feedback = ''
+                except (PolicyError, OSError, ValueError) as exc:
+                    store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': str(exc)})
+                    if current == 'check':
+                        coder.execution.append({'status': 'skipped', 'reason': str(exc)})
+                        coder.phase = 'done'
+                    else:
+                        coder.reject(str(exc))
+                if coder.current == 'files':
+                    coder.phase = 'check'
+                store.save_coder_progress(task, input_hash, coder.progress())
+                if coder.current == 'check' and coder.unwritable:
+                    raise RuntimeError('coder_action_format_exhausted:unwritable; ' + canonical(coder.unwritable))
+                if coder.current != 'done':
+                    continue
+                trusted_write(evidence, confined(root, evidence).read_bytes() +
+                              (canonical({'event': 'coder_self_check', 'results': coder.execution}) + '\n').encode())
+                action = coder.finish()
+            elif qa is not None:
                 try:
                     action = qa.accept(result.text)
                 except PolicyError as exc:

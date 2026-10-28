@@ -90,7 +90,7 @@ class RealPipeline(unittest.TestCase):
                 self.assertIn('Action template:', brief['attempt_failures'][0]['last_context'])
                 return write('artifacts/intake.json', json.dumps(audit))
             actions=([{'action': 'invalid_' + str(i)} for i in range(3)] if retry else []) + [retry_intake if retry else write('artifacts/intake.json',json.dumps(audit)),handoff,finish,*review('INTAKE'),
-                     write('wordfreq.py',wrong),write('test_unit.py',UNIT),handoff,finish,*review('CODER'),
+                     'wordfreq.py :: implementation\ntest_unit.py :: tests',wrong,UNIT,'["disallowed"]',*review('CODER'),
                      *integration_and_qa(),fix,handoff,finish,*review('FIXER'),*integration_and_qa()]
             store=Store(base/'board.db'); engine=Engine(store,FakeQueue(actions),lease_seconds=120)
             engine.submit(root,plan,grader/'acceptance.json')

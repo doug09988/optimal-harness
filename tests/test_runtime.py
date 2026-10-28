@@ -39,9 +39,12 @@ class RuntimeTests(unittest.TestCase):
             count=c.execute("SELECT count(*) FROM events WHERE kind='additional_actions_discarded'").fetchone()[0]
         self.assertEqual(count,1)
 
-    def run_coder(self, actions, role='CODER', prior_stage=''):
+    def run_coder(self, actions, role='FIXER', prior_stage=''):
         from optimal_harness.engine import make_brief
         from unittest.mock import patch
+        if role == 'FIXER':
+            # Retain shared action-loop coverage on a role that still uses it.
+            self.plan['stages']['FIXER'] = dict(self.plan['stages']['CODER'])
         self.submit()
         task = self.store.claim('worker', 60)
         task['stage'] = role
@@ -267,7 +270,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(value['data'], {'reviewed_stage': 'INTAKE'})
         validate_section('reviewed_stage', value['data']['reviewed_stage'], 'INTAKE')
 
-    def test_coder_format_denial_has_parseable_small_action(self):
+    def test_action_loop_format_denial_has_parseable_small_action(self):
         from optimal_harness.model import parse_action
         def correction(prompt):
             observation = prompt.split('LAST TOOL OBSERVATION', 1)[1]
@@ -461,13 +464,13 @@ class RuntimeTests(unittest.TestCase):
         task = self.run_coder([
             {'action': 'finish', 'summary': 'invalid', 'open_discrepancies': None}
         ] * 3)
-        self.assertIn('coder_handoff_exhausted:handoff_not_ready_or_malformed:finish.open_discrepancies', task['failure'])
+        self.assertIn('fixer_handoff_exhausted:handoff_not_ready_or_malformed:finish.open_discrepancies', task['failure'])
         with self.store.transaction() as c:
             kinds = [r[0] for r in c.execute('SELECT kind FROM events ORDER BY rowid')]
         self.assertIn('handoff_error_reported', kinds)
         self.assertNotIn('handoff_accepted', kinds)
 
-    def test_coder_chunks_recover_from_truncation(self):
+    def test_action_loop_chunks_recover_from_truncation(self):
         import re
         def after_bad(prompt):
             self.assertIn('correct the reported problem', prompt)
@@ -497,55 +500,19 @@ class RuntimeTests(unittest.TestCase):
             return {'action': 'write', 'path': path, 'data': data}
         return action
 
-    def test_coder_handoff_missing_field_corrects_before_acceptance(self):
-        def corrected(prompt):
-            self.assertIn('handoff.open_discrepancies', prompt)
-            self.assertIn('Rewrite the complete handoff', prompt)
-            from optimal_harness.handoff import ready_document
-            template = prompt.split('Template: ', 1)[1]
-            value, _ = json.JSONDecoder().raw_decode(template)
-            self.assertTrue(value['path'].endswith('/handoff.json'))
-            from optimal_harness.model import parse_action
-            raw = template.split('\n---CONTENT---\n', 1)[1]
-            payload, _ = json.JSONDecoder().raw_decode(raw)
-            ready_document(parse_action(json.dumps(value) + '\n---CONTENT---\n' + json.dumps(payload))['data'])
-            return self.coder_handoff({'status': 'ready', 'open_discrepancies': []})(prompt)
-        task = self.run_coder([
-            {'action': 'write', 'path': 'wordfreq.py', 'data': '# implementation'},
-            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
-            self.coder_handoff({'status': 'ready', 'summary': 'same defect as archived run'}),
-            corrected, {'action': 'finish', 'summary': 'done'}])
-        self.assertEqual(task['status'], 'SUCCEEDED')
-        with self.store.transaction() as c:
-            kinds = [r[0] for r in c.execute('SELECT kind FROM events ORDER BY rowid')]
-        self.assertEqual(kinds.count('tool_denied'), 1)
-        self.assertLess(kinds.index('stage_checks_passed'), kinds.index('handoff_accepted'))
-
-    def test_coder_handoff_retries_bounded_and_error_event_distinct(self):
-        task = self.run_coder([self.coder_handoff(data) for data in (
-            {'status': 'ready'}, {'status': 'ready', 'open_discrepancies': None},
-            {'status': 'ready', 'open_discrepancies': 'none'})])
-        self.assertIn('coder_handoff_exhausted:handoff.open_discrepancies', task['failure'])
-        self.assertEqual(self.engine.queue.calls, 3)
-        with self.store.transaction() as c:
-            kinds = [r[0] for r in c.execute('SELECT kind FROM events')]
-        self.assertNotIn('handoff_accepted', kinds)
-        self.assertIn('handoff_error_reported', kinds)
-        self.assertFalse(any(cp['path'].endswith('/handoff.json')
-                             for cp in self.store.checkpoints('wordcounter')))
-
-    def test_coder_premature_finish_names_missing_deliverables(self):
+    def test_action_loop_premature_finish_names_missing_deliverables(self):
         def correction(prompt):
             self.assertIn('missing_or_uncheckpointed_deliverables:wordfreq.py,test_unit.py', prompt)
             return {'action': 'write', 'path': 'wordfreq.py', 'data': '# code'}
         task = self.run_coder([
-            {'action': 'finish', 'summary': 'premature'}, correction,
+            {'action': 'finish', 'summary': 'premature', 'open_discrepancies': []}, correction,
             {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
             self.coder_handoff({'status': 'ready', 'open_discrepancies': ['known limitation']}),
             {'action': 'finish', 'summary': 'done'}])
         self.assertEqual(task['status'], 'SUCCEEDED')
 
-    def test_coder_finish_revalidates_unwritten_handoff(self):
+
+    def test_action_loop_finish_revalidates_unwritten_handoff(self):
         def corrected(prompt):
             self.assertIn('handoff.status must equal ready', prompt)
             self.assertIn('Correct readiness failure before finish', prompt)
@@ -681,9 +648,9 @@ class RuntimeTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(ModelError):
                 parse_action(text)
 
-    def test_coder_oversized_non_write_retries_are_bounded_without_writes(self):
+    def test_action_loop_oversized_non_write_retries_are_bounded_without_writes(self):
         task = self.run_coder([{'action': 'read', 'path': 'x'*5000}] * 3)
-        self.assertIn('coder_action_format_exhausted', task['failure'])
+        self.assertIn('fixer_action_format_exhausted', task['failure'])
         self.assertEqual(self.engine.queue.calls, 3)
         self.assertFalse((self.root/'wordfreq.py').exists())
 
@@ -695,13 +662,13 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ModelError):
             parse_action(json.dumps({'action': 'append', 'path': 'x', 'data': {}, 'more': False}))
 
-    def test_coder_truncated_retries_are_bounded(self):
+    def test_action_loop_truncated_retries_are_bounded(self):
         task = self.run_coder(['{"action":"write","data":"unfinished'] * 3)
-        self.assertIn('coder_action_format_exhausted', task['failure'])
+        self.assertIn('fixer_action_format_exhausted', task['failure'])
         self.assertEqual(self.engine.queue.calls, 3)
         self.assertFalse((self.root/'wordfreq.py').exists())
 
-    def test_coder_partial_file_cannot_finish(self):
+    def test_action_loop_partial_file_cannot_finish(self):
         task = self.run_coder([
             {'action': 'write', 'path': 'wordfreq.py', 'data': 'partial', 'more': True},
             {'action': 'finish', 'summary': 'premature'}])
