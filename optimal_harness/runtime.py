@@ -9,12 +9,13 @@ from .model import SYSTEM_PREFIX, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
-from .review import SECTIONS, validate_section, validate_document
+from .review import SECTIONS, validate_section, validate_document, section_template
 
 
 
 INTAKE_COMPLETE = ('INTAKE artifact is complete and valid. The remaining step is to finish '
-                   'with summary and open_discrepancies; do not rewrite the artifact.')
+                   'with summary and open_discrepancies; do not rewrite the artifact. Template: '
+                   '{"action":"finish","summary":"Describe completed work","open_discrepancies":[]}')
 
 
 def intake_span_error(key, reason, lines, start, end):
@@ -101,11 +102,22 @@ async def run_task(engine, task):
     review_sections = {}
     review_errors = {}
 
+    def review_template(section):
+        return section_template(conf['deliverables'][0], section, task['brief']['prior_stage'])
+
+    finish_template = canonical({'action': 'finish', 'summary': 'Describe completed work',
+                                 'open_discrepancies': []})
+
+    def intake_template(path):
+        from .verifier import LIFECYCLE
+        return canonical({'action': 'write', 'path': path, 'data': {'slots': {
+            key: {'status': 'gap', 'detail': 'Describe the actual gap'} for key in LIFECYCLE}}})
+
     def review_reject(section, reason):
         review_errors[section] = review_errors.get(section, 0) + 1
         if review_errors[section] >= 3:
-            raise RuntimeError("review_section_exhausted:" + section)
-        return "REVIEW section " + section + ": " + reason + "; invalid submissions=" + str(review_errors[section])
+            raise RuntimeError("review_section_exhausted:" + section + "; template: " + review_template(section))
+        return "REVIEW section " + section + ": template: " + review_template(section) + "; " + reason + "; invalid submissions=" + str(review_errors[section])
 
     def next_review_section():
         return next((key for key in SECTIONS if key not in review_sections), SECTIONS[0])
@@ -158,6 +170,10 @@ async def run_task(engine, task):
         if not engine._pins_intact(plan, root):
             raise PolicyError('pinned input or charter changed')
         broker, evidence, handoff, brief = engine._prepare(root, task)
+        if task['stage'] == 'REVIEW':
+            last = ('REVIEW sections — one action per section; example content must reflect your work:\n' +
+                    '\n'.join(key + ': ' + review_template(key) for key in SECTIONS))
+            last_observation = last
         manifest['evidence'], manifest['handoff'] = evidence, handoff
         trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
         while True:
@@ -267,9 +283,12 @@ async def run_task(engine, task):
                             '\nLAST SUCCESSFUL TOOL OBSERVATION:\n' + last_observation)
                     continue
                 action_format_errors += 1
-                last = chunk_feedback + '\n' + last
+                template = (intake_template(conf['deliverables'][0]) if task['stage'] == 'INTAKE' else
+                            canonical({'action': 'write', 'path': (conf.get('deliverables') or ['output.txt'])[0],
+                                       'data': 'Small complete file or first chunk', 'more': True}))
+                last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
                 if action_format_errors >= 3:
-                    raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks')
+                    raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks; template: ' + template)
                 repeat += 1
                 if repeat >= 3:
                     raise RuntimeError('error:no_progress:invalid_actions')
@@ -307,9 +326,9 @@ async def run_task(engine, task):
                         raise
                     coder_handoff_errors += 1
                     if coder_handoff_errors >= 3:
-                        raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc)) from exc
+                        raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc) + '; template: ' + finish_template) from exc
                     finish_feedback = ('Correct readiness failure before finish: ' + str(exc) +
-                                       '; finish requires summary and open_discrepancies')
+                                       '; finish requires summary and open_discrepancies; template: ' + finish_template)
                     last = finish_feedback
                     store.event('handoff_validation_denied', {'task': task['id'], 'reason': str(exc)})
                     continue
@@ -366,9 +385,11 @@ async def run_task(engine, task):
                         except ValueError as exc:
                             coder_handoff_errors += 1
                             if coder_handoff_errors >= 3:
-                                raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc)) from exc
+                                raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc) + '; template: ' + finish_template) from exc
                             raise PolicyError('CODER handoff schema: ' + str(exc) +
-                                              '. Rewrite the complete handoff object; then finish.') from exc
+                                              '. Rewrite the complete handoff object; then finish. Template: ' +
+                                              canonical({'action': 'write', 'path': handoff, 'data': {
+                                                  'status': 'ready', 'open_discrepancies': []}})) from exc
                     if task['stage'] == 'INTAKE' and action['path'] in conf.get('deliverables', []):
                         try:
                             if op != 'write':
@@ -378,11 +399,12 @@ async def run_task(engine, task):
                                     raise PolicyError('INTAKE pointer: source must be project specification')
                                 return source_read(source)
                             data = intake_document(data, spec_read)
-                        except PolicyError:
+                        except PolicyError as exc:
                             intake_format_errors += 1
                             if intake_format_errors >= 3:
-                                raise RuntimeError('intake_format_exhausted:three invalid documents; no artifact accepted')
-                            raise
+                                raise RuntimeError('intake_format_exhausted:three invalid documents; no artifact accepted; template: ' + intake_template(path))
+                            raise PolicyError('Template (fill with actual gaps or citations): ' +
+                                              intake_template(path) + '; ' + str(exc)) from exc
                     if task['stage'] == 'REVIEW' and path in conf.get('deliverables', []):
                         section = next_review_section()
                         try:
@@ -457,6 +479,11 @@ async def run_task(engine, task):
                 store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                             'op': op, 'path_or_name': action.get('path', action.get('name')), 'receipt': last})
             except (PolicyError, OSError, ValueError) as exc:
+                if (task['stage'] == 'INTAKE' and op in ('write', 'append') and
+                        action.get('path') in conf.get('deliverables', []) and
+                        'Template' not in str(exc)):
+                    exc = PolicyError('Template (complete document; fill with actual gaps or citations): ' +
+                                      intake_template(action['path']) + '; ' + str(exc))
                 last = 'TOOL_DENIED: ' + str(exc)[:1500] + '\nLAST SUCCESSFUL TOOL OBSERVATION:\n' + last_observation
                 if len(last.encode()) > ledger.budget['max_observation_bytes']:
                     last = 'TOOL_DENIED: ' + str(exc)[:1500] + '\nRe-read the last source using a smaller page before retrying.'

@@ -100,6 +100,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_generated_handoff_missing_fields_feedback(self):
         def corrected(prompt):
+            self.assertIn('template: {"action":"finish",', prompt)
             self.assertIn('open_discrepancies', prompt)
             return {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}
         task = self.run_coder([
@@ -124,6 +125,79 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(task['status'], 'SUCCEEDED')
         doc = json.loads((self.root/'artifacts/intake.json').read_text())
         self.assertEqual(doc['slots']['invocation']['quote'], text)
+
+    def test_review_templates_first_observation_and_all_denials(self):
+        from optimal_harness.review import SECTIONS, section_template, validate_section
+        from optimal_harness.model import parse_action
+        for section in SECTIONS:
+            for mode in ('schema', 'oversized', 'whole', 'unidentifiable'):
+                with self.subTest(section=section, mode=mode):
+                    if section != SECTIONS[0] or mode != 'schema':
+                        self.setUp()
+                    target = self.plan['stages']['REVIEW']['deliverables'][0]
+                    templates = {key: section_template(target, key, '') for key in SECTIONS}
+                    for key, template in templates.items():
+                        action = parse_action(template)
+                        self.assertEqual(action['path'], target)
+                        validate_section(key, action['data'][key], '')
+                    bad = {'action': 'write', 'path': target, 'data': {section: None}}
+                    if mode == 'oversized':
+                        bad['data'][section] = 'x' * 5000
+                    elif mode == 'whole':
+                        bad['data'] = {key: [] for key in SECTIONS}
+                    elif mode == 'unidentifiable':
+                        bad = '{'
+                    # Accept earlier sections so unidentifiable writes charge this section.
+                    prefix = [json.loads(templates[key]) for key in SECTIONS[:SECTIONS.index(section)]]
+                    def correction(prompt):
+                        denial = prompt.split('LAST TOOL OBSERVATION', 1)[1].split('SAVED RUN STATE', 1)[0]
+                        self.assertIn('REVIEW section ' + section, denial)
+                        self.assertIn('template: ' + templates[section], denial)
+                        return json.loads(templates[section])
+                    actions = prefix + [bad, correction, {'action': 'fail', 'reason': 'test stop'}]
+                    original = actions[0]
+                    def check_first(prompt):
+                        observation = prompt.split('LAST TOOL OBSERVATION', 1)[1]
+                        for key in SECTIONS:
+                            self.assertIn(key + ': ' + templates[key], observation)
+                        return original
+                    actions[0] = check_first
+                    task = self.run_coder(actions, role='REVIEW')
+                    self.assertIn('test stop', task['failure'])
+
+    def test_review_template_uses_literal_prior_stage(self):
+        from optimal_harness.review import section_template, validate_section
+        value = json.loads(section_template('artifacts/review.json', 'reviewed_stage', 'INTAKE'))
+        self.assertEqual(value['data'], {'reviewed_stage': 'INTAKE'})
+        validate_section('reviewed_stage', value['data']['reviewed_stage'], 'INTAKE')
+
+    def test_coder_format_denial_has_parseable_small_action(self):
+        from optimal_harness.model import parse_action
+        def correction(prompt):
+            observation = prompt.split('LAST TOOL OBSERVATION', 1)[1]
+            template = observation.split('Action template: ', 1)[1]
+            value, _ = json.JSONDecoder().raw_decode(template)
+            parse_action(json.dumps(value))
+            self.assertIn(value['path'], self.plan['stages']['CODER']['deliverables'])
+            self.assertLess(len(json.dumps(value).encode()), 4096)
+            return {'action': 'fail', 'reason': 'template checked'}
+        task = self.run_coder(['{', correction])
+        self.assertIn('template checked', task['failure'])
+
+    def test_intake_denial_template_is_complete_and_valid(self):
+        from optimal_harness.runtime import intake_document
+        from optimal_harness.model import parse_action
+        target = self.plan['stages']['INTAKE']['deliverables'][0]
+        def correction(prompt):
+            observation = prompt.split('LAST TOOL OBSERVATION', 1)[1]
+            template = observation.split('Template (fill with actual gaps or citations): ', 1)[1]
+            value, _ = json.JSONDecoder().raw_decode(template)
+            parse_action(json.dumps(value))
+            self.assertEqual(value['path'], target)
+            intake_document(value['data'])
+            return {'action': 'fail', 'reason': 'template checked'}
+        task = self.run_coder([{'action': 'write', 'path': target, 'data': {}}, correction], role='INTAKE')
+        self.assertIn('template checked', task['failure'])
 
     def test_review_sections_rewrite_feedback_and_full_assembly(self):
         target = self.plan['stages']['REVIEW']['deliverables'][0]
@@ -251,6 +325,11 @@ class RuntimeTests(unittest.TestCase):
         def corrected(prompt):
             self.assertIn('handoff.open_discrepancies', prompt)
             self.assertIn('Rewrite the complete handoff', prompt)
+            from optimal_harness.handoff import ready_document
+            template = prompt.split('Template: ', 1)[1]
+            value, _ = json.JSONDecoder().raw_decode(template)
+            self.assertTrue(value['path'].endswith('/handoff.json'))
+            ready_document(value['data'])
             return self.coder_handoff({'status': 'ready', 'open_discrepancies': []})(prompt)
         task = self.run_coder([
             {'action': 'write', 'path': 'wordfreq.py', 'data': '# implementation'},

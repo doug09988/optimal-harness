@@ -1,0 +1,49 @@
+# STAGE-07 — No denial without a template (fixer)
+
+Role: FIXER. Branch: codex/stage-07-denial-templates, cut
+from codex/stage-06-review-sections. Sandbox rules as
+before: .git read-only (no commits; leave the worktree
+complete), no model endpoint access, stdlib only, never
+modify examples/graders, ~/harness, ~/vault.
+
+DEFECT (coordinator-verified, live run wordcounter-verify-07):
+INTAKE passed with stage-05B feedback working exactly as
+designed in the wild. REVIEW then failed with
+review_section_exhausted:reviewed_stage — the worker never
+managed one valid submission of the simplest section (a
+single string). Evidence indicates it kept submitting
+whole-document writes (its pre-stage-5 habit); each was
+rejected and charged to the next missing section, but the
+denial apparently never showed the worker the exact section
+action shape, so three strikes burned without convergence.
+Same lesson as 05B, generalized: feedback that names an
+error without showing the correct shape does not converge
+for this model.
+
+FIX:
+1. Every REVIEW section denial (schema-invalid, oversized,
+whole-document, unidentifiable) must include a minimal
+VALID action template for the section being charged, e.g.
+{"action":"write","path":"<review deliverable path>",
+"data":{"reviewed_stage":"INTAKE"}} — with the correct
+literal path, the section key, and a type-correct example
+value (for counterexamples: one ATTEMPTED example string;
+for observations/unresolved: a one-item list example).
+2. The REVIEW task's first observation (or brief) must list
+the four sections with their one-line templates up front,
+before any submission.
+3. Audit the other denial paths (INTAKE schema denials,
+handoff readiness errors, CODER format feedback) and add
+the same minimal-template treatment wherever a denial
+currently names an error without showing the expected
+shape. Keep templates short; do not change any validation
+rule, budget, or gate.
+4. Charter touch-ups only where they must match the new
+feedback (review.md primarily).
+
+TESTS: template presence and correctness in review denials
+(each section), first-observation section listing, intake/
+handoff template additions if any, scripted pipeline green,
+full suite green. DELIVERABLE: code + tests +
+stages/STAGE-07-result.md with exact sandbox outcomes and a
+list of every denial path changed; no live claims.

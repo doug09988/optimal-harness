@@ -1,7 +1,16 @@
 """Review schema fragments shared by composition and the final gate."""
 from .policy import PolicyError
+from .store import canonical
 
 SECTIONS = ('reviewed_stage', 'counterexamples', 'observations', 'unresolved')
+
+
+def section_template(path, section, prior_stage):
+    examples = {'reviewed_stage': prior_stage,
+                'counterexamples': ['ATTEMPTED: inspect behavior for a missing input path'],
+                'observations': ['Describe an observed fact'],
+                'unresolved': ['Describe an unresolved question']}
+    return canonical({'action': 'write', 'path': path, 'data': {section: examples[section]}})
 
 
 def validate_section(section, value, prior_stage):

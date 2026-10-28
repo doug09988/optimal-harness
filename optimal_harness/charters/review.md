@@ -4,6 +4,9 @@ Examine the prior stage's declared outputs and their supporting inputs.
 Attempt at least one concrete counterexample before asserting a claim settled.
 Submit ONE section per write action to the declared review deliverable. Use
 `{"action":"write","path":"<review deliverable>","data":{"<section>":<value>}}`.
+The first observation lists all four one-line action templates with the literal
+deliverable path and type-correct example values. Denials repeat the template for
+the charged section. Replace example content with factual review content.
 Sections may be submitted in any order and rewritten independently. Do not send
 whole documents, append actions, or chunks. Keep each action small and complete.
 The runtime validates each section immediately, reports accepted/missing sections,
