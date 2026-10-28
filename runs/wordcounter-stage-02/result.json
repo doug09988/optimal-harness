@@ -1,0 +1,26 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "e515cf6441c146ab",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "model_queue_timeout_before_execution"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 8,
+    "head": "1796d985221a3adbc7d82dc2a73525477b7db739c9beb1709165a1a4c6e4939a"
+  },
+  "integrity_errors": []
+}

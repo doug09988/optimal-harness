@@ -1,0 +1,1724 @@
+--- reference/__init__.py
++++ optimal_harness/__init__.py
+@@ -1,3 +1,3 @@
+-"""Reliable Harness: model output is data, never authority."""
++"""Optimal Harness: contained local-model drafts, deterministic gates."""
+ 
+-__version__ = "0.1.0"
++__version__ = "0.2.0"
+--- reference/__main__.py
++++ optimal_harness/__main__.py
+@@ -0,0 +1,4 @@
++from .cli import main
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+--- reference/api.py
++++ optimal_harness/api.py
+@@ -0,0 +1,99 @@
++"""Loopback board API: role-separated bearer auth over the durable Store.
++
++The local runtime is a trusted board client; the MODEL never receives credentials,
++raw SQL access, argv selection, scheduler operations, or grade authority.
++"""
++from __future__ import annotations
++import hashlib
++import hmac
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++import json
++from pathlib import Path
++from .engine import Engine
++from .store import LeaseLost
++
++
++class BoardAPI:
++    def __init__(self, engine, credentials):
++        self.engine = engine
++        self.credentials = {}
++        for identity, config in credentials.items():
++            if config['role'] not in ('admin', 'verifier', 'worker'):
++                raise ValueError('unknown credential role')
++            token = config['token']
++            if not isinstance(token, str) or len(token) < 16:
++                raise ValueError('token must contain at least 16 characters')
++            self.credentials[identity] = (config['role'], hashlib.sha256(token.encode()).hexdigest())
++
++    def authenticate(self, header):
++        if not header.startswith('Bearer '):
++            raise PermissionError('bearer token required')
++        token_hash = hashlib.sha256(header[7:].encode()).hexdigest()
++        for identity, (role, expected) in self.credentials.items():
++            if hmac.compare_digest(expected, token_hash):
++                return identity, role
++        raise PermissionError('invalid token')
++
++    def dispatch(self, identity, role, path, data):
++        store = self.engine.store
++        allowed = {'/submit': {'admin'}, '/grade': {'verifier'},
++                   '/claim': {'worker'}, '/heartbeat': {'worker'}, '/handoff': {'worker'},
++                   '/status': {'admin', 'verifier'}, '/audit': {'admin', 'verifier'}}
++        if role not in allowed.get(path, set()):
++            raise PermissionError('role forbidden for route')
++        if path == '/submit':
++            return {'project': self.engine.submit(Path(data['root']), data['plan'], Path(data['grader']))}
++        if path == '/grade':
++            if type(data['approved']) is not bool:
++                raise ValueError('approved must be boolean')
++            self.engine.coordinator_verdict(data['project'], data['approved'], data['notes'])
++            return {'status': store.project(data['project'])['status']}
++        if path == '/claim':
++            return {'task': store.claim(identity, 1800)}
++        if path in ('/heartbeat', '/handoff'):
++            task = data['task']
++            if task.get('lease_owner') != identity:
++                raise PermissionError('only lease owner may act')
++            if path == '/heartbeat':
++                usage = data.get("usage_delta")
++                status = store.meter(task, **usage) if usage is not None else store.meter(task, calls=0)
++                store.heartbeat(task, 1800)
++                return {"ok": True, **status}
++            # Accept-and-flag reports are not a stage-pass capability.
++            body = data['report']
++            if not isinstance(body, dict):
++                raise ValueError('report must be object')
++            store.handoff(task, body)
++            return {'accepted': True, 'requires_runtime_verification': True}
++        if path == '/status':
++            return {'projects': store.projects()}
++        return store.audit()
++
++    def server(self, port=0):
++        app = self
++        class Handler(BaseHTTPRequestHandler):
++            def do_POST(self):
++                try:
++                    identity, role = app.authenticate(self.headers.get('Authorization', ''))
++                    n = int(self.headers.get('Content-Length', '0'))
++                    if not 0 < n <= 1048576:
++                        raise ValueError('invalid body length')
++                    data = json.loads(self.rfile.read(n))
++                    result = app.dispatch(identity, role, self.path, data)
++                    status = 200
++                except PermissionError as exc:
++                    status, result = 403, {'error': str(exc)}
++                except LeaseLost as exc:
++                    status, result = 409, {'error': str(exc)}
++                except Exception as exc:
++                    status, result = 400, {'error': str(exc)}
++                raw = json.dumps(result).encode()
++                self.send_response(status)
++                self.send_header('Content-Type', 'application/json')
++                self.send_header('Content-Length', str(len(raw)))
++                self.end_headers()
++                self.wfile.write(raw)
++
++            def log_message(self, *args):
++                pass
++        return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+--- reference/charters/intake.md
++++ optimal_harness/charters/intake.md
+@@ -1,6 +1,8 @@
+ # INTAKE — lifecycle audit, no design work
+ 
+-Read only the specification. Produce JSON with exactly nine `slots` keys:
++Read only the specification. The output ROOT must be {"slots": {...}}.
++Do not put the nine keys at the root; nest ALL of them inside the "slots" object.
++The slots object has exactly these nine keys:
+ `invocation`, `input_existence`, `input_access`, `input_emptiness`,
+ `malformed_entries`, `ties`, `aggregation_edges`, `output_shape_order`,
+ `exit_behavior`. Each slot is either
+@@ -9,3 +11,20 @@
+ No suggestions, extrapolation, or brainstorming. Missing requirements are GAPS.
+ Write the audit artifact, append evidence, mark the handoff `ready`, and finish.
+ An unresolved gap halts execution for human/coordinator clarification.
++
++Complete JSON skeleton (replace every placeholder with source evidence; never
++copy placeholders as evidence). Use action=write with this object as data:
++{"slots":{
++  "invocation":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "input_existence":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "input_access":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "input_emptiness":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "malformed_entries":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "ties":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "aggregation_edges":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "output_shape_order":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"},
++  "exit_behavior":{"status":"citation","quote":"<exact spec substring>","because":"<reason>"}
++}}
++If a slot is undefined, replace its entire value with
++{"status":"gap","detail":"<precise missing requirement>"}. Never invent a quote.
++Format errors receive deterministic tool feedback; correct the whole document.
+--- reference/charters/review.md
++++ optimal_harness/charters/review.md
+@@ -3,7 +3,12 @@
+ Examine the prior stage's declared outputs and their supporting inputs.
+ Attempt at least one concrete counterexample before asserting a claim settled.
+ Write JSON with `reviewed_stage`, `counterexamples` (list of testable cases),
+-`observations` (list), and `unresolved` (list). If citing sources, quote exact
++`observations` (list), and `unresolved` (list).
++The counterexamples list contains ATTEMPTED TEST CASES, not only discovered bugs.
++It MUST contain at least one nonempty string even if you find no defect. An empty
++list is invalid. Example case: "Invoke with a nonexistent input path and expect
++exit code 2 without creating output." Record what was considered, not invented
++execution results. If citing sources, quote exact
+ substrings and supply a because-clause. Do not pronounce success/failure or
+ edit another role's outputs. Your review is evidence for the independent
+ verifier, never a verdict.
+--- reference/checks.py
++++ optimal_harness/checks.py
+@@ -0,0 +1,46 @@
++"""Exact deterministic text/CSV checks (no model judgment)."""
++import csv
++import io
++import json
++from .policy import PolicyError
++
++KINDS = {'contains', 'not-contains', 'verbatim', 'csv-count', 'csv-cell', 'csv-set', 'citations-verbatim', 'unchanged'}
++
++
++def check(v, item):
++    kind = item['type']
++    if kind == 'unchanged':
++        from .verifier import digest
++        from .policy import confined
++        ok = digest(confined(v.root, item['path'])) == item['expected']
++    elif kind in ('contains', 'not-contains'):
++        found = item['text'] in v.text(item['path'])
++        ok = found if kind == 'contains' else not found
++    elif kind == 'verbatim':
++        def sliced(path, bounds):
++            text = v.text(path)
++            lo, hi = bounds
++            if type(lo) is not int or (hi is not None and type(hi) is not int) or lo < 0 or (hi is not None and (hi < lo or hi > len(text))):
++                raise PolicyError('invalid verbatim slice')
++            return text[lo:hi]
++        ok = sliced(item['source'], item.get('source_slice', [0, None])) == sliced(item['target'], item.get('target_slice', [0, None]))
++    elif kind == 'citations-verbatim':
++        data = v.json(item['path'])
++        claims = data.get(item.get('claims_key', 'claims'), [])
++        ok = bool(claims) and not v.embedded_quotes(item['path'], item['sources'])
++        ok = ok and all(isinstance(c, dict) and 'quote' in c for c in claims)
++    else:
++        rows = list(csv.DictReader(io.StringIO(v.text(item['path']))))
++        matching = [r for r in rows if all(r[k] == value for k, value in item.get('where', {}).items())]
++        if kind == 'csv-count':
++            ok = len(matching) == item['expected']
++        elif kind == 'csv-cell':
++            ok = len(matching) == 1 and matching[0][item['column']] == str(item['expected'])
++        else:
++            expected = {r[item['column']] for r in matching}
++            actual = v.json(item['target'])
++            for key in item.get('target_key', '').split('.'):
++                if key:
++                    actual = actual[key]
++            ok = isinstance(actual, list) and set(actual) == expected and len(actual) == len(set(actual))
++    return None if ok else kind + ': deterministic mismatch: ' + item.get('path', item.get('target', ''))
+--- reference/cli.py
++++ optimal_harness/cli.py
+@@ -15,7 +15,7 @@
+ 
+ 
+ def parser() -> argparse.ArgumentParser:
+-    p = argparse.ArgumentParser(prog="reliable-harness")
++    p = argparse.ArgumentParser(prog="optimal-harness")
+     p.add_argument("--db", default="harness.sqlite3", help="durable SQLite board / audit chain")
+     sub = p.add_subparsers(dest="command", required=True)
+     s = sub.add_parser("submit", help="register a coordinator-designed project")
+@@ -25,13 +25,16 @@
+     s = sub.add_parser("run", help="run queued agents; serialize only local model calls")
+     s.add_argument("--endpoint", default="http://127.0.0.1:8080")
+     s.add_argument("--model", required=True)
+-    s.add_argument("--jobs", type=int, default=3)
++    s.add_argument("--jobs", type=int, default=1)
+     s.add_argument("--forever", action="store_true")
++    s = sub.add_parser("serve", help="loopback role-authenticated board API")
++    s.add_argument("--auth-file", required=True)
++    s.add_argument("--port", type=int, default=8431)
+     sub.add_parser("status")
+     s = sub.add_parser("tasks")
+     s.add_argument("project")
+     sub.add_parser("audit")
+-    s = sub.add_parser("verify", help="read-only independent machine gate report")
++    s = sub.add_parser("verify", help="independent machine checks with captured verifier receipts")
+     s.add_argument("project")
+     s = sub.add_parser("grade", help="coordinator verdict after machine gate")
+     s.add_argument("project")
+@@ -54,12 +57,20 @@
+             plan = json.loads(Path(args.plan).read_text())
+             print(json.dumps({"project": engine.submit(Path(args.root), plan, Path(args.grader))}))
+         elif args.command == "run":
+-            if args.jobs < 1 or args.jobs > 32:
+-                raise ValueError("jobs must be between 1 and 32")
++            if args.jobs != 1:
++                raise ValueError("one trusted worker job is supported")
+             engine.queue = ModelQueue(LocalChatClient(args.endpoint, args.model),
+                                       Path(args.db).resolve().parent / "model.lock")
+             asyncio.run(engine.serve(jobs=args.jobs, until_idle=not args.forever))
+             print(json.dumps(store.projects(), indent=2))
++        elif args.command == "serve":
++            from .api import BoardAPI
++            api = BoardAPI(engine, json.loads(Path(args.auth_file).read_text()))
++            server = api.server(args.port)
++            try:
++                server.serve_forever()
++            finally:
++                server.server_close()
+         elif args.command == "status":
+             print(json.dumps(store.projects(), indent=2))
+         elif args.command == "tasks":
+@@ -73,11 +84,16 @@
+             if not Engine._pins_intact(project["plan"], Path(project["root"])):
+                 raise ValueError("pinned spec, input, or private grader changed")
+             private = Path(project["plan"]["private_grader_file"])
+-            checks = json.loads(private.read_text())["checks"]
++            errors = engine.integrity_errors(args.project, Path(project["root"]))
++            if errors:
++                raise ValueError(";".join(errors))
++            checks = json.loads(private.read_text())["checks"] + engine._discrepancy_checks(args.project)
+             for role in ("INTEGRATOR", "QA"):
+                 for command in project["plan"]["stages"][role]["commands"].values():
+                     checks.append({"type": "command_receipt", "path": command["capture"]})
+-            result = Verifier(Path(project["root"]), private.parent).verify(checks)
++            verifier = Verifier(Path(project["root"]), private.parent)
++            result = verifier.verify(checks)
++            result["receipt_pointers"] = engine._record_verifier_receipts(args.project, Path(project["root"]), verifier.receipts)
+             print(json.dumps(result, indent=2))
+             return 0 if result["passed"] else 1
+         elif args.command == "grade":
+--- reference/commands.py
++++ optimal_harness/commands.py
+@@ -0,0 +1,112 @@
++"""Coordinator-pinned command broker. macOS is a detection-only boundary.
++
++A staged per-file cwd jail prevents accidental access; it is NOT OS isolation.
++Code can use absolute paths/network on macOS. requires_isolation fails closed.
++"""
++from __future__ import annotations
++import hashlib
++import os
++from pathlib import Path
++import shutil
++import signal
++import subprocess
++import sys
++import tempfile
++import time
++from .policy import PolicyError, confined, normalized, atomic_write
++
++
++def sha(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def run_command(root, command, max_seconds=30, trusted_files=None):
++    root = Path(root).resolve(strict=True)
++    argv = command.get('argv')
++    if not isinstance(argv, list) or not argv or any(not isinstance(x, str) or not x or '\x00' in x for x in argv):
++        raise PolicyError('command requires fixed argv')
++    executable = shutil.which(argv[0])
++    if executable is None:
++        raise PolicyError('command executable unavailable')
++    if command.get('executable_sha256') and sha(Path(executable).resolve()) != command['executable_sha256']:
++        raise PolicyError('command executable pin changed')
++    isolated = sys.platform.startswith('linux') and shutil.which('bwrap') is not None
++    if command.get('requires_isolation', False) and not isolated:
++        raise PolicyError('command requires_isolation: OS sandbox unavailable')
++    reads = [normalized(p) for p in command.get('reads', [])]
++    writes = [normalized(p) for p in command.get('writes', [])]
++    if set(reads) & set(writes) or any(p.endswith('/**') for p in reads + writes):
++        raise PolicyError('commands require disjoint exact file mounts')
++    trusted_files = trusted_files or {}
++    if set(trusted_files) & set(reads + writes):
++        raise PolicyError('private mount shadows worker file')
++    before = {p: sha(confined(root, p)) for p in reads}
++    private_before = {p: sha(Path(f)) for p, f in trusted_files.items()}
++    timeout = min(float(max_seconds), float(command.get('timeout_seconds', max_seconds)))
++    if timeout <= 0:
++        raise PolicyError('command deadline exhausted')
++    if isolated:
++        from .policy import linux_sandbox_command
++        result = linux_sandbox_command(root, command, int(timeout), trusted_files)
++        result['containment'] = 'bubblewrap'
++        return result
++    work = root / '.harness' / 'commands'
++    work.mkdir(parents=True, exist_ok=True)
++    with tempfile.TemporaryDirectory(dir=work, prefix='cmd-') as tmp:
++        jail = Path(tmp)
++        for p in reads + writes:
++            dest = confined(jail, p)
++            dest.parent.mkdir(parents=True, exist_ok=True)
++            src = confined(root, p)
++            if src.exists():
++                if not src.is_file():
++                    raise PolicyError('nonregular mount')
++                shutil.copyfile(src, dest)
++            elif p in reads:
++                raise PolicyError('missing read mount')
++        for p, source in trusted_files.items():
++            dest = confined(jail, p)
++            dest.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copyfile(source, dest)
++        temp = jail / '.tmp'
++        temp.mkdir()
++        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(jail),
++               'TMPDIR': str(temp), 'PYTHONDONTWRITEBYTECODE': '1',
++               'PYTHONPATH': str(jail), 'LANG': 'en_US.UTF-8'}
++        started = time.monotonic()
++        outpath, errpath = jail / '.stdout', jail / '.stderr'
++        with outpath.open('wb') as out, errpath.open('wb') as err:
++            process = subprocess.Popen([executable, *argv[1:]], cwd=jail, env=env,
++                                       stdout=out, stderr=err, start_new_session=True)
++            reason = 'exited'
++            try:
++                code = process.wait(timeout=timeout)
++            except subprocess.TimeoutExpired:
++                reason = 'command_timeout'
++                code = None
++            finally:
++                # Kill descendants too, including after their parent exits.
++                try:
++                    os.killpg(process.pid, signal.SIGKILL)
++                except ProcessLookupError:
++                    pass
++                process.wait()
++        changed = [p for p, pin in before.items()
++                   if not confined(root, p).is_file() or sha(confined(root, p)) != pin
++                   or not confined(jail, p).is_file() or sha(confined(jail, p)) != pin]
++        changed += [p for p, pin in private_before.items() if sha(Path(trusted_files[p])) != pin
++                    or sha(confined(jail, p)) != pin]
++        if changed:
++            raise PolicyError('command modified read-only mount: ' + ','.join(changed))
++        for p in writes:
++            src = confined(jail, p)
++            if src.is_file():
++                atomic_write(confined(root, p), src.read_bytes())
++        import base64
++        stdout, stderr = outpath.read_bytes(), errpath.read_bytes()
++        return {'exit_code': code, 'reason': reason, 'seconds': time.monotonic()-started,
++                'stdout': stdout.decode('utf-8', errors='replace'),
++                'stderr': stderr.decode('utf-8', errors='replace'),
++                'stdout_base64': base64.b64encode(stdout).decode(),
++                'stderr_base64': base64.b64encode(stderr).decode(),
++                'containment': 'degraded:staged-cwd-argv-pins;not-os-isolation'}
+--- reference/engine.py
++++ optimal_harness/engine.py
+@@ -9,9 +9,12 @@
+ from pathlib import Path
+ import time
+ import uuid
++import copy
++import shutil
+ from typing import Any
+ 
+-from .model import Completion, ModelError, ModelQueue, parse_action
++from .model import Completion, ModelError, ModelQueue, parse_action, SYSTEM_PREFIX
++from .ledger import Ledger, DEFAULT_BUDGET
+ from .policy import FileBroker, PolicyError, atomic_write, confined, normalized, sandbox_command
+ from .store import LeaseLost, Store, canonical
+ from .verifier import Verifier, digest, validate_plan
+@@ -24,7 +27,7 @@
+ 
+ 
+ def role_text(role: str) -> str:
+-    return importlib.resources.files("reliable_harness").joinpath("charters", role.lower() + ".md").read_text()
++    return importlib.resources.files("optimal_harness").joinpath("charters", role.lower() + ".md").read_text()
+ 
+ 
+ def make_brief(role: str, plan: dict, notes: str = "", source_stage: str = "") -> dict:
+@@ -46,7 +49,7 @@
+ 
+ 
+ class Engine:
+-    def __init__(self, store: Store, queue: ModelQueue, lease_seconds: int = 60):
++    def __init__(self, store: Store, queue: ModelQueue, lease_seconds: int = 1800):
+         self.store = store
+         self.queue = queue
+         self.lease_seconds = lease_seconds
+@@ -56,11 +59,21 @@
+         grader_file = grader_file.resolve(strict=True)
+         if grader_file.is_relative_to(root):
+             raise PolicyError("independent grading keys must be outside worker project root")
++        plan = copy.deepcopy(plan)
++        for conf in plan["stages"].values():
++            conf["writes"] = list(dict.fromkeys(conf.get("writes", []) + conf.get("writable", [])))
+         validate_plan(plan, root, grader_file)
+         project = plan["id"]
+         if not isinstance(project, str) or not project.isidentifier():
+             raise PolicyError("project ID must be identifier")
+-        plan = dict(plan)
++        plan = copy.deepcopy(plan)
++        for conf in plan["stages"].values():
++            conf["writes"] = list(dict.fromkeys(conf.get("writes", []) + conf.get("writable", [])))
++            for command in conf.get("commands", {}).values():
++                executable = shutil.which(command["argv"][0])
++                if not executable:
++                    raise PolicyError("command executable unavailable")
++                command["executable_sha256"] = digest(Path(executable).resolve())
+         plan["private_grader_file"] = str(grader_file)
+         input_paths = [plan["spec"], *plan.get("immutable_inputs", [])]
+         plan["input_hashes"] = {p: digest(confined(root, p)) for p in input_paths}
+@@ -73,6 +86,7 @@
+         for role in plan["stages"]:
+             path = confined(root, f"vault/charters/{role.lower()}.md")
+             atomic_write(path, role_text(role).encode())
++        plan["charter_hashes"] = {f"vault/charters/{r.lower()}.md": digest(confined(root, f"vault/charters/{r.lower()}.md")) for r in plan["stages"]}
+         self.store.add_project(project, root, plan, make_brief("INTAKE", plan))
+         return project
+ 
+@@ -85,37 +99,43 @@
+             return
+ 
+     def _checkpoint(self, root: Path, task: dict, path: str,
+-                    checkpoints: dict[str, str], source: str) -> None:
++                    checkpoints: dict[str, str], source: str, connection=None) -> None:
+         full = confined(root, path)
+         if not full.is_file():
+             raise PolicyError("cannot checkpoint missing artifact")
++        if connection is None:
++            return self.store.commit(task, lambda c: self._checkpoint(root, task, path, checkpoints, source, c))
+         sha = digest(full)
+         data = full.read_bytes()
+-        archive = confined(root, f"vault/checkpoints/{task['id']}/{len(checkpoints):04d}-{sha}.blob")
++        archive = confined(root, f"vault/checkpoints/{sha}.blob")
+         atomic_write(archive, data)
+         checkpoints[path] = sha
+-        self.store.event("artifact_checkpoint", {
+-            "project": task["project_id"], "task": task["id"], "path": path,
+-            "sha256": sha, "bytes": len(data), "archive": str(archive.relative_to(root)),
+-            "source": source,
+-        })
++        archive_rel = str(archive.relative_to(root))
++        if connection is None:
++            self.store.commit(task, lambda c: self.store.checkpoint(c, task, path, sha, archive_rel))
++        else:
++            self.store.checkpoint(connection, task, path, sha, archive_rel)
+ 
+     def _prepare(self, root: Path, task: dict) -> tuple[FileBroker, str, str, str]:
+         role = task["stage"]
+         brief = task["brief"]
+-        base = f"vault/runs/{task['id']}"
++        base = f"vault/runs/{task['id']}/a{task['generation']}"
+         charter, brief_path = f"vault/charters/{role.lower()}.md", f"{base}/brief.json"
+         evidence, handoff = f"{base}/evidence.jsonl", f"{base}/handoff.json"
+-        # These two are created before any worker call. No completions are assumed.
+-        atomic_write(confined(root, brief_path), (json.dumps(brief, indent=2) + "\n").encode())
+-        if not confined(root, evidence).exists():
+-            atomic_write(confined(root, evidence), (canonical({"event": "run_started", "task": task["id"]}) + "\n").encode())
+-        if not confined(root, handoff).exists():
+-            atomic_write(confined(root, handoff), (canonical({"status": "in_progress", "open_discrepancies": [], "summary": ""}) + "\n").encode())
++        # Preparation is fenced too: a stale runtime may not touch run nodes.
++        def prepare(c):
++            atomic_write(confined(root, brief_path), (json.dumps(brief, indent=2) + "\n").encode())
++            if not confined(root, evidence).exists():
++                atomic_write(confined(root, evidence), (canonical({"event": "run_started", "task": task["id"]}) + "\n").encode())
++            if not confined(root, handoff).exists():
++                atomic_write(confined(root, handoff), (canonical({"status": "in_progress", "open_discrepancies": [], "summary": ""}) + "\n").encode())
++        self.store.commit(task, prepare)
+         plan = self.store.project(task["project_id"])["plan"]
+         conf = plan["stages"][role]
+         declared_reads = task["brief"]["permitted_reads"]
+         reads = declared_reads + [charter, brief_path, evidence, handoff]
++        reads += [cmd["capture"] for cmd in conf.get("commands", {}).values()]
++        reads += [f"{base}/commands/{name}.json" for name in conf.get("commands", {})]
+         writes = conf.get("writes", []) + [evidence, handoff]
+         return FileBroker(root, reads, writes), evidence, handoff, brief_path
+ 
+@@ -126,111 +146,11 @@
+         return ("ROLE CHARTER (pinned file):\n" + charter + "\nTASK BRIEF (pinned file):\n" + brief +
+                 "\nALLOWED FILE POINTERS (nothing else may be read):\n" +
+                 canonical({"reads": sorted(broker.reads), "writes": sorted(broker.writes)}) +
+-                "\nLAST TOOL OBSERVATION (bounded, not a conversation history):\n" + observation[:2200])
++                "\nLAST TOOL OBSERVATION (bounded, not a conversation history):\n" + observation)
+ 
+     async def run_task(self, task: dict) -> None:
+-        project = self.store.project(task["project_id"])
+-        plan, root = project["plan"], Path(project["root"])
+-        role = task["stage"]
+-        conf = plan["stages"][role]
+-        budget = {"max_calls": 24, "max_fresh_tokens": 20000,
+-                  "max_seconds": 180, "max_completion_tokens": 768,
+-                  "max_prompt_bytes": 16000, "max_command_seconds": 30} | conf.get("budget", {})
+-        began = time.monotonic()
+-        calls = fresh = cached = 0
+-        checkpoints: dict[str, str] = {}
+-        last = "New run. Evidence and handoff files already exist."
+-        monitor = asyncio.create_task(self._heartbeat(task))
+-        try:
+-            broker, evidence, handoff, brief_path = self._prepare(root, task)
+-            while True:
+-                self.store.assert_lease(task)
+-                if time.monotonic() - began >= budget["max_seconds"]:
+-                    raise RuntimeError("circuit_breaker:wall_clock")
+-                if calls >= budget["max_calls"]:
+-                    raise RuntimeError("circuit_breaker:model_calls")
+-                if fresh >= budget["max_fresh_tokens"]:
+-                    raise RuntimeError("circuit_breaker:fresh_tokens")
+-                prompt = self._context(root, task, broker, last)
+-                if len(prompt.encode()) > budget["max_prompt_bytes"]:
+-                    raise RuntimeError("circuit_breaker:context_bytes")
+-                remaining = max(1, budget["max_fresh_tokens"] - fresh)
+-                max_response = min(budget["max_completion_tokens"], remaining)
+-                timeout = max(0.5, budget["max_seconds"] - (time.monotonic() - began))
+-                calls += 1
+-                self.store.event("model_call_started", {"task": task["id"], "call": calls,
+-                                                       "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()})
+-                result: Completion = await self.queue.request(prompt, max_response, timeout)
+-                fresh += result.fresh_tokens
+-                cached += result.cached_tokens
+-                self.store.event("model_call_finished", {
+-                    "task": task["id"], "call": calls, "prompt_tokens": result.prompt_tokens,
+-                    "cached_tokens": result.cached_tokens,
+-                    "fresh_tokens": result.fresh_tokens, "completion_tokens": result.completion_tokens,
+-                    "total_fresh_tokens": fresh, "raw_action": result.text,
+-                })
+-                if fresh > budget["max_fresh_tokens"]:
+-                    raise RuntimeError("circuit_breaker:fresh_tokens_after_meter")
+-                action = parse_action(result.text)
+-                op = action["action"]
+-                if op == "fail":
+-                    raise RuntimeError("honest_worker_failure:" + action["reason"][:300])
+-                if op == "finish":
+-                    self._check_stage(root, task, conf, checkpoints, handoff)
+-                    self.store.finish(task, "SUCCEEDED")
+-                    try:
+-                        self._advance(task, plan, root)
+-                    except Exception as exc:
+-                        self.store.event("scheduler_fault", {"task": task["id"], "reason": str(exc)[:700]})
+-                        self.store.project_status(task["project_id"], "ESCALATED", "scheduler_fault:" + str(exc)[:600])
+-                    return
+-                try:
+-                    self.store.assert_lease(task)
+-                    if op == "read":
+-                        content = broker.read(action["path"])
+-                        last = "READ " + action["path"] + " contents:\n" + content[:2000]
+-                        receipt = {"bytes": len(content.encode()), "sha256": hashlib.sha256(content.encode()).hexdigest()}
+-                    elif op in ("write", "append"):
+-                        bytecount = broker.write(action["path"], action["data"], append=op == "append")
+-                        self._checkpoint(root, task, action["path"], checkpoints, op)
+-                        last = f"{op.upper()} committed to {action['path']}, {bytecount} bytes"
+-                        receipt = {"bytes": bytecount, "sha256": checkpoints[action["path"]]}
+-                    elif op == "command":
+-                        name = action["name"]
+-                        if name not in conf.get("commands", {}):
+-                            raise PolicyError("command not opted in for this brief")
+-                        command = conf["commands"][name]
+-                        output = await asyncio.to_thread(sandbox_command, root, command,
+-                                                         budget["max_command_seconds"])
+-                        capture = command["capture"]
+-                        # Capture is owned exclusively by the trusted runner.
+-                        atomic_write(confined(root, capture), (json.dumps(output, indent=2) + "\n").encode())
+-                        self._checkpoint(root, task, capture, checkpoints, "machine_command:" + name)
+-                        last = "COMMAND " + name + ": " + canonical(output)[:2000]
+-                        receipt = {"capture": capture, "exit_code": output["exit_code"], "reason": output["reason"]}
+-                    else:
+-                        raise PolicyError("unknown action")
+-                    self.store.event("tool_action", {"task": task["id"], "op": op,
+-                                                     "path_or_name": action.get("path", action.get("name")),
+-                                                     "result": receipt})
+-                except (PolicyError, OSError, ValueError) as exc:
+-                    if op == "command" and ("sandbox" in str(exc).lower() or "bubblewrap" in str(exc).lower()):
+-                        raise RuntimeError("command_isolation_unavailable:" + str(exc)) from exc
+-                    last = "TOOL_DENIED: " + str(exc)[:500]
+-                    self.store.event("tool_denied", {"task": task["id"], "op": op, "reason": str(exc)[:500]})
+-        except (Exception, asyncio.CancelledError) as exc:
+-            reason = str(exc)[:700]
+-            self.store.event("run_aborted", {"task": task["id"], "reason": reason,
+-                                             "model_calls": calls, "fresh_tokens": fresh,
+-                                             "cached_tokens_not_billed": cached})
+-            try:
+-                self.store.finish(task, "FAILED", reason)
+-                self.store.project_status(task["project_id"], "ESCALATED", reason)
+-            except LeaseLost:
+-                pass  # reclaimed generation owns this task now
+-        finally:
+-            monitor.cancel()
+-            await asyncio.gather(monitor, return_exceptions=True)
++        from .runtime import run_task
++        await run_task(self, task)
+ 
+     def _check_stage(self, root: Path, task: dict, conf: dict,
+                      checkpoints: dict[str, str], handoff: str) -> None:
+@@ -242,17 +162,21 @@
+             elif digest(file) != checkpoints[path]:
+                 missing.append(path + " (modified since checkpoint)")
+         if missing:
+-            raise RuntimeError("missing_or_uncheckpointed_deliverables:" + ",".join(missing))
+-        for path in conf.get("deliverables", []):
+-            if path.endswith(".json"):
++            raise RuntimeError("error:missing_deliverables:missing_or_uncheckpointed_deliverables:" + ",".join(missing))
++        for path in set(conf.get("deliverables", [])) | set(checkpoints):
++            if path not in {c["capture"] for c in conf.get("commands", {}).values()}:
+                 spec = self.store.project(task["project_id"])["plan"]["spec"]
+-                errors = Verifier(root).embedded_quotes(path, task["brief"]["permitted_reads"],
++                permitted_sources = task["brief"]["permitted_reads"] + [cmd["capture"] for cmd in conf.get("commands", {}).values()]
++                permitted_sources += [f"vault/runs/{task['id']}/a{task['generation']}/commands/{name}.json" for name in conf.get("commands", {})]
++                errors = Verifier(root).embedded_quotes(path, permitted_sources,
+                                                          spec if task["stage"] == "INTAKE" else None)
+                 if errors:
+                     raise RuntimeError("citation_check_failed:" + ";".join(errors)[:600])
+         data = json.loads(confined(root, handoff).read_text())
+         if data.get("status") != "ready" or not isinstance(data.get("open_discrepancies"), list):
+             raise RuntimeError("handoff_not_ready_or_malformed")
++        if data.get('open_discrepancies'):
++            self.store.event('handoff_discrepancies', {'task': task['id'], 'count': len(data['open_discrepancies'])})
+         if task["stage"] == "INTAKE":
+             plan = self.store.project(task["project_id"])["plan"]
+             errors = Verifier(root).intake(conf["deliverables"][0], plan["spec"])
+@@ -262,9 +186,13 @@
+             report = json.loads(confined(root, conf["deliverables"][0]).read_text())
+             if (not isinstance(report, dict) or report.get("reviewed_stage") != task["brief"]["prior_stage"] or
+                 not isinstance(report.get("counterexamples"), list) or not report["counterexamples"] or
++                any(not isinstance(case, str) or not case.strip() for case in report['counterexamples']) or
+                 not isinstance(report.get("observations"), list) or
+                 not isinstance(report.get("unresolved"), list)):
+                 raise RuntimeError("review_missing_counterexample_pass_or_schema")
++        for path, expected in checkpoints.items():
++            if digest(confined(root, path)) != expected:
++                raise RuntimeError("modified-after-checkpoint:" + path)
+         self.store.event("stage_checks_passed", {"task": task["id"], "deliverables": checkpoints})
+ 
+     def _advance(self, task: dict, plan: dict, root: Path) -> None:
+@@ -282,16 +210,67 @@
+             self.store.enqueue(task["project_id"], "REVIEW", task["cycle"],
+                                make_brief("REVIEW", plan, review_notes, role), next_stage=nxt)
+ 
++    def _record_verifier_receipts(self, project, root, receipts):
++        pointers = []
++        gate_id = 'verifier-' + uuid.uuid4().hex
++        for i, receipt in enumerate(receipts):
++            path = f'vault/verifier/{gate_id}/{i}.json'
++            data = (canonical(receipt) + '\n').encode()
++            sha = hashlib.sha256(data).hexdigest()
++            archive = f'vault/checkpoints/{sha}.blob'
++            atomic_write(confined(root, path), data)
++            atomic_write(confined(root, archive), data)
++            with self.store.transaction() as c:
++                self.store.checkpoint(c, {'id': gate_id, 'generation': 0, 'project_id': project}, path, sha, archive)
++            pointers.append(path)
++        return pointers
++
++    def integrity_errors(self, project, root):
++        latest = {}
++        errors = []
++        for cp in self.store.checkpoints(project):
++            try:
++                if digest(confined(root, cp['archive'])) != cp['sha256']:
++                    errors.append('checkpoint archive tampered:' + cp['archive'])
++                latest[cp['path']] = cp['sha256']
++            except (OSError, PolicyError):
++                errors.append('checkpoint archive missing:' + cp['archive'])
++        for path, expected in latest.items():
++            try:
++                if digest(confined(root, path)) != expected:
++                    errors.append('modified-after-checkpoint:' + path)
++            except (OSError, PolicyError):
++                errors.append('checkpointed file missing:' + path)
++        return errors
++
++    def _discrepancy_checks(self, project):
++        checks = []
++        cycle = self.store.project(project)['cycle']
++        tasks = {t['id']: t for t in self.store.tasks(project)
++                 if t['cycle'] == cycle and t['status'] == 'SUCCEEDED'}
++        for cp in self.store.checkpoints(project):
++            if cp['task'] in tasks and cp['path'].endswith('/handoff.json'):
++                checks.append({'type': 'discrepancy-free', 'path': cp['archive'], 'key': 'open_discrepancies'})
++            if cp['task'] in tasks and tasks[cp['task']]['stage'] == 'REVIEW' and cp['path'].endswith('.json') and not cp['path'].startswith('vault/'):
++                checks.append({'type': 'discrepancy-free', 'path': cp['archive'], 'key': 'unresolved'})
++        return checks
++
+     def _gate(self, project: str, plan: dict, root: Path) -> None:
++        errors = self.integrity_errors(project, root)
++        if errors:
++            self.store.project_status(project, 'ESCALATED', ';'.join(errors))
++            return
+         if not self._pins_intact(plan, root):
+             self.store.project_status(project, "ESCALATED", "pinned_spec_or_private_grader_changed")
+             return
+         private = Path(plan["private_grader_file"])
+-        checks = json.loads(private.read_text())["checks"]
++        checks = json.loads(private.read_text())["checks"] + self._discrepancy_checks(project)
+         for role in ("INTEGRATOR", "QA"):
+             for command in plan["stages"][role]["commands"].values():
+                 checks.append({"type": "command_receipt", "path": command["capture"]})
+-        result = Verifier(root, private.parent).verify(checks)
++        verifier = Verifier(root, private.parent)
++        result = verifier.verify(checks)
++        result["receipt_pointers"] = self._record_verifier_receipts(project, root, verifier.receipts)
+         self.store.event("satisfiability_gate", {"project": project, "report": result})
+         if any("sandbox could not establish isolation" in str(r["error"]) or
+                "bubblewrap required" in str(r["error"]) for r in result["results"]):
+@@ -303,7 +282,8 @@
+         # A defect signature derives only from independent deterministic failures.
+         failures = [r["error"] for r in result["results"] if not r["passed"]]
+         notes = "\n".join(failures)
+-        fingerprint = hashlib.sha256(canonical(failures).encode()).hexdigest()[:16]
++        from .failures import fingerprint as defect_fingerprint
++        fingerprint = defect_fingerprint(failures, root)
+         cycle, repeats = self.store.failure_cycle(project, fingerprint)
+         if repeats >= 3:
+             self.store.project_status(project, "ESCALATED", "three failed cycles on same defect: " + notes)
+@@ -319,12 +299,18 @@
+         if not self._pins_intact(p["plan"], Path(p["root"])):
+             self.store.project_status(project, "ESCALATED", "pinned_spec_or_private_grader_changed_before_grade")
+             raise PolicyError("ground truth changed after submission; escalation required")
++        errors = self.integrity_errors(project, Path(p["root"]))
++        if errors:
++            self.store.project_status(project, "ESCALATED", ";".join(errors))
++            raise PolicyError("checkpoint integrity failed before grade")
+         private = Path(p["plan"]["private_grader_file"])
+-        checks = json.loads(private.read_text())["checks"]
++        checks = json.loads(private.read_text())["checks"] + self._discrepancy_checks(project)
+         for role in ("INTEGRATOR", "QA"):
+             for command in p["plan"]["stages"][role]["commands"].values():
+                 checks.append({"type": "command_receipt", "path": command["capture"]})
+-        report = Verifier(Path(p["root"]), private.parent).verify(checks)
++        verifier = Verifier(Path(p["root"]), private.parent)
++        report = verifier.verify(checks)
++        report["receipt_pointers"] = self._record_verifier_receipts(project, Path(p["root"]), verifier.receipts)
+         self.store.event("pre_grade_recheck", {"project": project, "report": report})
+         if not report["passed"]:
+             self.store.project_status(project, "ESCALATED", "machine gate no longer passes at grading time")
+@@ -333,25 +319,48 @@
+         if approved:
+             self.store.project_status(project, "DONE", notes)
+         else:
+-            fingerprint = hashlib.sha256(notes.encode()).hexdigest()[:16]
+-            cycle, repeats = self.store.failure_cycle(project, fingerprint)
+-            if repeats >= 3:
+-                self.store.project_status(project, "ESCALATED", "three coordinator rejections on identical defect")
+-            else:
+-                self.store.project_status(project, "RUNNING", "coordinator returned failed work")
+-                self.store.enqueue(project, "FIXER", cycle,
+-                                   make_brief("FIXER", p["plan"], notes, "COORDINATOR"))
++            # Coordinator prose is never a deterministic defect fingerprint.
++            cycle = p['cycle'] + 1
++            with self.store.transaction() as c:
++                c.execute('UPDATE projects SET cycle=? WHERE id=?', (cycle, project))
++            self.store.project_status(project, "RUNNING", "coordinator returned failed work")
++            self.store.enqueue(project, "FIXER", cycle,
++                               make_brief("FIXER", p["plan"], notes, "COORDINATOR"))
+ 
+     @staticmethod
+     def _pins_intact(plan: dict, root: Path) -> bool:
+         try:
+-            return (all(digest(confined(root, p)) == expected for p, expected in plan["input_hashes"].items()) and
++            return (all(digest(confined(root, p)) == expected for p, expected in plan.get("charter_hashes", {}).items()) and
++                    all(digest(confined(root, p)) == expected for p, expected in plan["input_hashes"].items()) and
+                     all(digest(Path(p)) == expected for p, expected in plan["grading_hashes"].items()))
+         except (OSError, ValueError, PolicyError):
+             return False
+ 
+-    async def serve(self, jobs: int = 3, until_idle: bool = True) -> None:
++    async def serve(self, jobs: int = 1, until_idle: bool = True) -> None:
++        if jobs != 1:
++            raise ValueError("one trusted worker job is supported")
++        import fcntl
++        with self.store.db.with_suffix(".worker.lock").open("a+b") as lock:
++            try:
++                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
++            except BlockingIOError as exc:
++                raise RuntimeError("another runtime owns this board") from exc
++            try:
++                await self._serve(jobs, until_idle)
++            finally:
++                fcntl.flock(lock, fcntl.LOCK_UN)
++
++    async def _serve(self, jobs=1, until_idle=True):
+         await self.queue.start()
++        # Repair a crash after durable stage finish but before enqueue/gate.
++        for project in self.store.projects():
++            tasks = self.store.tasks(project["id"])
++            if project["status"] == "RUNNING" and tasks and tasks[-1]["status"] == "SUCCEEDED":
++                with self.store.transaction() as c:
++                    row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (tasks[-1]["id"],)).fetchone())
++                row["brief"] = json.loads(row["brief"])
++                p = self.store.project(project["id"])
++                self._advance(row, p["plan"], Path(p["root"]))
+         async def worker(index: int) -> None:
+             owner = uuid.uuid4().hex + "-" + str(index)
+             while True:
+--- reference/failures.py
++++ optimal_harness/failures.py
+@@ -0,0 +1,19 @@
++"""Fingerprint only checker failures, excluding command-run nondeterminism.
++
++Fixer notes remain VERBATIM. Only the hash input removes ephemeral cwd paths,
++unittest timings and memory addresses. It never includes model commentary.
++"""
++import hashlib
++import re
++from .store import canonical
++
++
++def fingerprint(failures, root):
++    normalized = []
++    for failure in failures:
++        text = failure.replace(str(root), '/job')
++        text = re.sub(r'/job/\.harness/commands/cmd-[^/\s]+', '/job', text)
++        text = re.sub(r'Ran (\d+) tests? in [\d.]+s', r'Ran \1 tests in <time>s', text)
++        text = re.sub(r'0x[0-9a-fA-F]+', '<address>', text)
++        normalized.append(text)
++    return hashlib.sha256(canonical(normalized).encode()).hexdigest()[:16]
+--- reference/ledger.py
++++ optimal_harness/ledger.py
+@@ -0,0 +1,55 @@
++"""Attempt-local, server-usage ledger; conservative reserve before dispatch."""
++from __future__ import annotations
++import time
++
++DEFAULT_BUDGET = {'max_calls': 60, 'max_fresh_tokens': 200000,
++                  'max_seconds': 1800, 'max_prompt_bytes': 131072,
++                  'max_command_seconds': 60, 'max_observation_bytes': 32768,
++                  'max_call_seconds': 180, 'max_completion_tokens': 8192}
++
++
++class BudgetExceeded(RuntimeError):
++    pass
++
++
++class Ledger:
++    def __init__(self, config=None, clock=time.monotonic):
++        self.budget = DEFAULT_BUDGET | (config or {})
++        if any(type(v) not in (int, float) or v <= 0 for v in self.budget.values()):
++            raise ValueError('budgets must be positive numbers')
++        self.clock = clock
++        self.started = clock()
++        self.calls = self.fresh = self.cached = 0
++
++    @property
++    def seconds(self):
++        return self.clock() - self.started
++
++    def reserve(self, prompt, static_prefix=''):
++        if self.calls >= self.budget['max_calls']:
++            raise BudgetExceeded('circuit_breaker:model_calls')
++        if self.seconds >= self.budget['max_seconds']:
++            raise BudgetExceeded('circuit_breaker:wall_clock')
++        if len(prompt.encode()) > self.budget['max_prompt_bytes']:
++            raise BudgetExceeded('circuit_breaker:context_bytes')
++        # UTF-8 bytes conservatively bound text tokens; reserve template overhead.
++        # Cache cannot be assumed before the server reports it.
++        prompt_reserve = len((static_prefix + prompt).encode()) + 512
++        cap = int(self.budget['max_fresh_tokens'] - self.fresh - prompt_reserve)
++        if cap < 1:
++            raise BudgetExceeded('circuit_breaker:fresh_tokens_reserve')
++        return min(cap, int(self.budget['max_completion_tokens'])), min(self.budget['max_call_seconds'], self.budget['max_seconds']-self.seconds)
++
++    def charge(self, result):
++        values = (result.prompt_tokens, result.cached_tokens, result.completion_tokens)
++        if any(type(v) is not int or v < 0 for v in values) or values[1] > values[0]:
++            raise ValueError('invalid server usage')
++        self.calls += 1
++        self.fresh += result.fresh_tokens
++        self.cached += result.cached_tokens
++        if self.fresh > self.budget['max_fresh_tokens']:
++            raise BudgetExceeded('circuit_breaker:fresh_tokens_after_meter')
++
++    def totals(self):
++        return {'calls': self.calls, 'fresh_tokens': self.fresh, 'cached_tokens_not_billed': self.cached,
++                'seconds': self.seconds}
+--- reference/model.py
++++ optimal_harness/model.py
+@@ -16,9 +16,14 @@
+ 
+ SYSTEM_PREFIX = """You are a bounded worker inside an evidence-first harness.
+ You have no external tools, shell, browser, memory, or subagent capability.
+-Your entire reply MUST be one JSON object with exactly one action:
+-{"action":"read","path":"relative/path"}
++Your entire reply MUST be one JSON object with exactly one action.
++STOP after that object's closing brace. Never emit a second action or predict a
++read result. File contents are unknown until the next call supplies the observation.
++Choose ONE of these action schemas (these are alternatives, NOT a sequence):
++{"action":"read","path":"relative/path","offset":0,"length":16384}
+ {"action":"write","path":"relative/path","data":"full UTF-8 content"}
++For JSON deliverables, prefer a JSON object as data instead of an escaped string:
++{"action":"write","path":"report.json","data":{"claims":[]}}
+ {"action":"append","path":"relative/path","data":"UTF-8 content to append"}
+ {"action":"command","name":"declared-command-name"}
+ {"action":"finish","summary":"factual statement"}
+@@ -55,7 +60,7 @@
+             raise ModelError("local model endpoint must use loopback HTTP")
+         if parsed.username or parsed.password or not parsed.port:
+             raise ModelError("local model URL needs port and no credentials")
+-        self.url = url.rstrip("/") + "/v1/chat/completions"
++        self.url = url.rstrip("/").removesuffix("/v1") + "/v1/chat/completions"
+         self.model = model
+ 
+     def complete(self, prompt: str, max_tokens: int, timeout: float) -> Completion:
+@@ -83,7 +88,7 @@
+             if not isinstance(usage, dict):
+                 raise ModelError("server omitted usage; cannot meter accurately")
+             prompt_n, output_n = usage.get("prompt_tokens"), usage.get("completion_tokens")
+-            if not isinstance(prompt_n, int) or not isinstance(output_n, int):
++            if type(prompt_n) is not int or type(output_n) is not int or min(prompt_n, output_n) < 0:
+                 raise ModelError("server provided invalid token usage")
+             details = usage.get("prompt_tokens_details") or {}
+             cached_n = details.get("cached_tokens", usage.get("cached_tokens", 0))
+@@ -112,13 +117,17 @@
+ 
+     def __init__(self, client: LocalChatClient, lockfile: Path):
+         self.client = client
++        from .server_config import discover_cache_configuration
++        self.cache_config = discover_cache_configuration(urlparse(client.url).port)
+         self.lockfile = lockfile
+         self.lockfile.parent.mkdir(parents=True, exist_ok=True)
+-        self.queue: asyncio.Queue = asyncio.Queue()
++        self.healthy = True
++        self.queue = None
+         self.consumer: asyncio.Task | None = None
+ 
+     async def start(self) -> None:
+         if self.consumer is None:
++            self.queue = asyncio.Queue()
+             self.consumer = asyncio.create_task(self._pump())
+ 
+     async def stop(self) -> None:
+@@ -127,14 +136,16 @@
+             await self.consumer
+             self.consumer = None
+ 
+-    async def request(self, prompt: str, max_tokens: int, timeout: float) -> Completion:
++    async def request(self, prompt: str, max_tokens: int, timeout: float, restart_hook=None) -> Completion:
+         if self.consumer is None:
+             raise ModelError("model queue is not started")
++        if not self.healthy and restart_hook is None:
++            raise ModelError("lane unhealthy after failed generation; explicit recovery required")
+         future = asyncio.get_running_loop().create_future()
+-        await self.queue.put((prompt, max_tokens, timeout, future))
++        await self.queue.put((prompt, max_tokens, timeout, future, restart_hook, time.monotonic() + timeout))
+         return await asyncio.wait_for(future, timeout=timeout + 5)
+ 
+-    def _locked_request(self, prompt: str, max_tokens: int, timeout: float) -> Completion:
++    def _locked_request(self, prompt: str, max_tokens: int, timeout: float, restart_hook=None) -> Completion:
+         deadline = time.monotonic() + timeout
+         with self.lockfile.open("a+b") as f:
+             # No unbounded file-lock wait. Expired requests MUST NOT run later.
+@@ -150,6 +161,11 @@
+                 remaining = deadline - time.monotonic()
+                 if remaining <= 0:
+                     raise ModelError("model_queue_timeout_before_execution")
++                if restart_hook is not None:
++                    restart_hook()
++                    remaining = deadline - time.monotonic()
++                    if remaining <= 0:
++                        raise ModelError("lane_restart_exceeded_deadline")
+                 ctx = multiprocessing.get_context("spawn")
+                 parent, child = ctx.Pipe(duplex=False)
+                 process = ctx.Process(target=_single_http_request,
+@@ -171,21 +187,46 @@
+             finally:
+                 fcntl.flock(f, fcntl.LOCK_UN)
+ 
++    async def recover(self, restart_hook, timeout=120):
++        """Explicit trusted restart + real completion, under the same lane lock.
++
++        No automatic retry of an unmetered timed-out generation. Caller records
++        probe usage separately. This build never restarts the shared production lane.
++        """
++        if restart_hook is None:
++            raise ModelError('lane recovery needs coordinator-provided restart hook')
++        result = await self.request('Return exactly {"action":"finish","summary":"lane ready"}',
++                                    32, timeout, restart_hook=restart_hook)
++        action = parse_action(result.text)
++        if action['action'] != 'finish' or result.completion_tokens < 1:
++            raise ModelError('lane real-completion probe failed')
++        self.healthy = True
++        return result
++
+     async def _pump(self) -> None:
+         while True:
+             item = await self.queue.get()
+             if item is None:
+                 self.queue.task_done()
+                 return
+-            prompt, max_tokens, timeout, future = item
++            prompt, max_tokens, timeout, future, restart_hook, deadline = item
+             try:
+                 if not future.cancelled():
+-                    result = await asyncio.to_thread(self._locked_request, prompt, max_tokens, timeout)
++                    if not self.healthy and restart_hook is None:
++                        raise ModelError('lane unhealthy; explicit recovery required')
++                    remaining = deadline - time.monotonic()
++                    if remaining <= 0:
++                        raise ModelError("model_queue_timeout_before_execution")
++                    result = await asyncio.to_thread(self._locked_request, prompt, max_tokens, remaining, restart_hook)
+                     if not future.done():
+                         future.set_result(result)
+             except Exception as exc:
++                if "queue_timeout_before_execution" not in str(exc):
++                    self.healthy = False
+                 if not future.done():
+-                    future.set_exception(exc)
++                    # Do not export this live pump's traceback: callers (notably
++                    # unittest.assertRaises on Python 3.9) may clear its frames.
++                    future.set_exception(ModelError(str(exc)))
+             finally:
+                 self.queue.task_done()
+ 
+@@ -202,6 +243,18 @@
+         "append": {"action", "path", "data"}, "command": {"action", "name"},
+         "finish": {"action", "summary"}, "fail": {"action", "reason"},
+     }[action["action"]]
+-    if set(action) != legal or any(not isinstance(action[k], str) for k in legal - {"action"}):
++    if action["action"] == "read":
++        if not set(action) <= legal | {"offset", "length"}:
++            raise ModelError("invalid read schema")
++        for key in ("offset", "length"):
++            if key in action and type(action[key]) is not int:
++                raise ModelError("page must be integer")
++        legal = set(action)
++    if not {"action", "path"} <= set(action) and action["action"] == "read":
++        raise ModelError("missing read path")
++    typed = legal - {"action", "offset", "length"}
++    if action["action"] == "write" and isinstance(action.get("data"), (dict, list)):
++        typed -= {"data"}
++    if set(action) != legal or any(not isinstance(action[k], str) for k in typed):
+         raise ModelError("worker action violates schema")
+     return action
+--- reference/policy.py
++++ optimal_harness/policy.py
+@@ -62,18 +62,33 @@
+         self.writes = set(map(normalized, writes))
+         self.max_bytes = max_bytes
+ 
+-    def read(self, path: str) -> str:
++    def read(self, path: str, offset: int = 0, length: int | None = None) -> str:
+         path = normalized(path)
+-        if path not in self.reads:
++        if path not in self.reads and not any(p.endswith('/**') and path.startswith(p[:-2]) for p in self.reads):
+             raise PolicyError("read not on declared allowlist")
+         full = confined(self.root, path)
+-        if not full.is_file() or full.stat().st_size > self.max_bytes:
+-            raise PolicyError("file missing, non-regular or exceeds read limit")
+-        return full.read_text(encoding="utf-8")
++        length = self.max_bytes if length is None else length
++        if type(offset) is not int or type(length) is not int or offset < 0 or not 0 < length <= self.max_bytes:
++            raise PolicyError("invalid byte page")
++        if not full.is_file():
++            raise PolicyError("file missing or non-regular")
++        with full.open('rb') as f:
++            f.seek(offset)
++            data = f.read(length)
++        # Never invent replacement characters in a verbatim evidence read.
++        import codecs
++        try:
++            decoder = codecs.getincrementaldecoder('utf-8')('strict')
++            text = decoder.decode(data, final=(offset + len(data) >= full.stat().st_size))
++        except UnicodeDecodeError as exc:
++            raise PolicyError('read offset is not UTF-8 aligned or file is not UTF-8') from exc
++        if data and not text:
++            raise PolicyError('page too short for UTF-8 character; increase length')
++        return text
+ 
+     def write(self, path: str, data: str, append: bool = False) -> int:
+         path = normalized(path)
+-        if path not in self.writes:
++        if path not in self.writes and not any(p.endswith('/**') and path.startswith(p[:-2]) for p in self.writes):
+             raise PolicyError("write not on declared allowlist")
+         if not isinstance(data, str):
+             raise PolicyError("write data must be text")
+@@ -95,7 +110,7 @@
+     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+ 
+ 
+-def sandbox_command(root: Path, command: dict[str, Any], max_seconds: int = 30,
++def linux_sandbox_command(root: Path, command: dict[str, Any], max_seconds: int = 30,
+                     trusted_files: dict[str, Path] | None = None) -> dict[str, Any]:
+     """Run a predeclared argv with ONLY mounted project files.
+ 
+@@ -164,8 +179,13 @@
+         "exit_code": result.returncode,
+         "reason": "exited" if result.returncode >= 0 else "killed_by_signal",
+         "seconds": round(time.monotonic()-started, 3),
+-        "stdout": result.stdout[:16384], "stderr": result.stderr[:16384],
++        "stdout": result.stdout, "stderr": result.stderr,
+     }
+     if result.returncode and ("bwrap:" in result.stderr or "Operation not permitted" in result.stderr):
+         raise PolicyError("sandbox could not establish isolation: " + result.stderr[:300])
+     return output
++
++
++def sandbox_command(root, command, max_seconds=30, trusted_files=None):
++    from .commands import run_command
++    return run_command(root, command, max_seconds, trusted_files)
+--- reference/runtime.py
++++ optimal_harness/runtime.py
+@@ -0,0 +1,272 @@
++"""Bounded fresh-context runtime, with trusted receipts and honest handoffs."""
++from __future__ import annotations
++import asyncio
++import hashlib
++import json
++from pathlib import Path
++from .ledger import Ledger
++from .model import SYSTEM_PREFIX, parse_action, ModelError
++from .policy import PolicyError, atomic_write, confined, sandbox_command
++from .store import canonical, LeaseLost
++
++
++def intake_document(data):
++    """Normalize only an unambiguous wrapper omission; never invent slot content."""
++    from .verifier import LIFECYCLE
++    try:
++        document = json.loads(data) if isinstance(data, str) else data
++    except ValueError as exc:
++        raise PolicyError('INTAKE schema: data must be a complete JSON object') from exc
++    if isinstance(document, dict) and set(document) == set(LIFECYCLE):
++        document = {'slots': document}
++    slots = document.get('slots', {}) if isinstance(document, dict) else {}
++    if not isinstance(slots, dict) or set(slots) != set(LIFECYCLE):
++        keys = set(slots) if isinstance(slots, dict) else set()
++        raise PolicyError('INTAKE schema: rewrite the COMPLETE document with slots object; missing=' +
++                          ','.join(sorted(set(LIFECYCLE)-keys)) + '; unexpected=' +
++                          ','.join(sorted(keys-set(LIFECYCLE))))
++    for key in LIFECYCLE:
++        item = slots[key]
++        if not isinstance(item, dict) or item.get('status') not in ('citation', 'gap'):
++            raise PolicyError('INTAKE schema: ' + key + ' must be an object with status=citation or gap')
++        fields = ('quote', 'because') if item['status'] == 'citation' else ('detail',)
++        for field in fields:
++            if not isinstance(item.get(field), str) or not item[field].strip():
++                raise PolicyError('INTAKE schema: ' + key + '.' + field + ' must be a nonempty string')
++    return document
++
++
++async def run_task(engine, task):
++    store = engine.store
++    project = store.project(task['project_id'])
++    plan, root = project['plan'], Path(project['root'])
++    conf = plan['stages'][task['stage']]
++    ledger = Ledger(conf.get('budget'))
++    checkpoints = {}
++    monitor = asyncio.create_task(engine._heartbeat(task))
++    broker = handoff = evidence = None
++    manifest_path = f"vault/runs/{task['id']}/a{task['generation']}/manifest.json"
++    last = 'New run. Write deliverables, write ready handoff, then finish.'
++    last_observation = last
++    repeat = 0
++    previous = None
++    seen_actions = {}
++    intake_format_errors = 0
++    manifest = {'task': task['id'], 'generation': task['generation'], 'role': task['stage'],
++                'budget': ledger.budget, 'static_prefix_sha256': hashlib.sha256(SYSTEM_PREFIX.encode()).hexdigest(),
++                'charter_sha256': plan['charter_hashes'][f"vault/charters/{task['stage'].lower()}.md"],
++                'cache_configuration': getattr(engine.queue, 'cache_config', {'max_bytes': 268435456, 'verified': False}),
++                'status': 'running'}
++    manifest['cache_configuration_sha256'] = hashlib.sha256(canonical(manifest['cache_configuration']).encode()).hexdigest()
++
++    def trusted_write(path, data):
++        def effect(c):
++            atomic_write(confined(root, path), data)
++            # An honest runtime error may replace a model's ready handoff.
++            # Keep its new trusted value checkpointed rather than falsely
++            # diagnosing the runtime's own report update as outside tampering.
++            if path in checkpoints:
++                engine._checkpoint(root, task, path, checkpoints, 'trusted_report', c)
++        store.commit(task, effect, allow_report=True)
++
++    def write_checkpoint(path, data=None, append=False):
++        def effect(c):
++            count = None
++            if data is not None:
++                count = broker.write(path, data, append=append)
++            engine._checkpoint(root, task, path, checkpoints, 'runtime', c)
++            return count
++        return store.commit(task, effect)
++
++    try:
++        if not engine._pins_intact(plan, root):
++            raise PolicyError('pinned input or charter changed')
++        broker, evidence, handoff, brief = engine._prepare(root, task)
++        manifest['evidence'], manifest['handoff'] = evidence, handoff
++        trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
++        while True:
++            store.assert_lease(task)
++            progress = canonical({'checkpointed': sorted(checkpoints),
++                                  'missing_deliverables': [p for p in conf.get('deliverables', []) if p not in checkpoints],
++                                  'handoff_path': handoff, 'evidence_path': evidence})
++            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints]
++            context_task = dict(task)
++            context_task['brief'] = dict(task['brief']) | {
++                'deliverables': missing,
++                'already_checkpointed_do_not_repeat': sorted(checkpoints),
++                'role_work_complete': not missing,
++                'current_goal': ('Produce remaining deliverables only' if missing else
++                                 'The role work is ALREADY COMPLETE. Only write the ready handoff and finish.'),
++            }
++            prompt = engine._context(root, context_task, broker, last) + '\nSAVED RUN STATE:\n' + progress
++            prompt += ('\nEXECUTION RULE: The LAST TOOL OBSERVATION has ALREADY EXECUTED. '
++                       'Do not request that same read again. Use the returned content to do the next step. '
++                       'Files in checkpointed are already written; do not repeat those writes. '
++                       'Once all deliverables are checkpointed, write the handoff JSON with '
++                       'status=ready, open_discrepancies=[], summary=<factual summary>, then finish. '
++                       'Respond with ONE next JSON action only.')
++            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints]
++            commands = {cmd['capture']: name for name, cmd in conf.get('commands', {}).items()}
++            if missing:
++                target = missing[0]
++                next_step = ('Run named command ' + commands[target] if target in commands else
++                             'Create ' + target + ' using action=write, path=' + target + ', data=<complete file text>')
++            elif handoff not in checkpoints:
++                next_step = 'Write ready handoff at ' + handoff
++            else:
++                next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
++            if ledger.calls == 0 and plan['spec'] in task['brief']['permitted_reads']:
++                next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
++            prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
++            prompt += '\nCompleted model calls in this attempt: ' + str(ledger.calls)
++            if last.startswith('{') and '"content":' in last:
++                prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
++            cap, timeout = ledger.reserve(prompt, SYSTEM_PREFIX)
++            store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
++                        'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
++                        'completion_cap': cap})
++            manifest["calls_dispatched"] = manifest.get("calls_dispatched", 0) + 1
++            try:
++                result = await engine.queue.request(prompt, cap, timeout)
++            except Exception:
++                manifest["usage_unknown_for_failed_request"] = True
++                raise
++            # Persist actual usage before the breaker, even if the server over-reports.
++            store.event('model_call_finished', {'task': task['id'], 'generation': task['generation'],
++                        'prompt_tokens': result.prompt_tokens, 'cached_tokens': result.cached_tokens,
++                        'completion_tokens': result.completion_tokens, 'fresh_tokens': result.fresh_tokens,
++                        'raw_action': result.text})
++            metered = store.meter(task, result.prompt_tokens, result.cached_tokens, result.completion_tokens)
++            ledger.charge(result)
++            if metered["budget_exceeded"]:
++                raise RuntimeError("circuit_breaker:board_attempt_budget")
++            if ledger.seconds >= ledger.budget['max_seconds']:
++                raise RuntimeError('circuit_breaker:wall_clock_after_call')
++            try:
++                decoder = json.JSONDecoder()
++                _, end = decoder.raw_decode(result.text.lstrip())
++                first = result.text.lstrip()[:end]
++                if result.text.lstrip()[end:].strip():
++                    store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
++                                'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
++                action = parse_action(first)
++            except (ModelError, ValueError) as exc:
++                # A bounded correction is fresh, not replay of malformed history.
++                last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
++                        + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
++                repeat += 1
++                if repeat >= 3:
++                    raise RuntimeError('error:no_progress:invalid_actions')
++                continue
++            op = action['action']
++            signature = canonical(action)
++            repeat = repeat + 1 if signature == previous else 0
++            previous = signature
++            seen_actions[signature] = seen_actions.get(signature, 0) + 1
++            if repeat >= 3 or seen_actions[signature] >= 4:
++                raise RuntimeError('error:no_progress:repeated_action')
++            if op == 'fail':
++                raise RuntimeError('honest_worker_failure:' + action['reason'])
++            if op == 'finish':
++                engine._check_stage(root, task, conf, checkpoints, handoff)
++                manifest.update(status='succeeded', usage=ledger.totals())
++                trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
++                store.handoff(task, {'status': 'ready', 'evidence': evidence, 'handoff': handoff,
++                                    'manifest': manifest_path, 'usage': ledger.totals(), 'budget_exceeded': False})
++                store.finish(task, 'SUCCEEDED')
++                engine._advance(task, plan, root)
++                return
++            try:
++                store.assert_lease(task)
++                if op == 'read':
++                    offset, length = action.get('offset', 0), action.get('length', 16384)
++                    # Budget includes JSON escaping; no silent truncation of pages.
++                    if length > ledger.budget['max_observation_bytes'] // 2:
++                        raise PolicyError('page exceeds observation budget; use smaller length')
++                    content = broker.read(action['path'], offset, length)
++                    full = confined(root, action['path'])
++                    last = canonical({'path': action['path'], 'offset': offset, 'length': length,
++                                      'total_bytes': full.stat().st_size, 'content': content,
++                                      'next_offset': min(offset+len(content.encode('utf-8')), full.stat().st_size)})
++                    if len(last.encode('utf-8')) > ledger.budget['max_observation_bytes']:
++                        raise PolicyError('encoded read page exceeds observation budget; reduce length')
++                elif op in ('write', 'append'):
++                    data = action["data"]
++                    if task['stage'] == 'INTAKE' and action['path'] in conf.get('deliverables', []):
++                        try:
++                            if op != 'write':
++                                raise PolicyError('INTAKE schema: use write for the complete JSON document, not append')
++                            data = intake_document(data)
++                        except PolicyError:
++                            intake_format_errors += 1
++                            if intake_format_errors >= 3:
++                                raise RuntimeError('intake_format_exhausted:three invalid documents; no artifact accepted')
++                            raise
++                    if task['stage'] == 'REVIEW' and action['path'] in conf.get('deliverables', []):
++                        report = json.loads(data) if isinstance(data, str) else data
++                        if (not isinstance(report, dict) or report.get('reviewed_stage') != task['brief']['prior_stage'] or
++                            not isinstance(report.get('counterexamples'), list) or not report['counterexamples'] or
++                            any(not isinstance(case, str) or not case.strip() for case in report['counterexamples']) or
++                            not isinstance(report.get('observations'), list) or not isinstance(report.get('unresolved'), list)):
++                            raise PolicyError('REVIEW schema: reviewed_stage must be ' + task['brief']['prior_stage'] +
++                                              '; counterexamples must contain at least one nonempty ATTEMPTED test case even if no bug was found; observations and unresolved must be lists. Rewrite the complete report.')
++                    if isinstance(data, (dict, list)):
++                        data = canonical(data) + "\n"
++                    count = write_checkpoint(action['path'], data, op == 'append')
++                    last = canonical({'written': action['path'], 'bytes': count, 'sha256': checkpoints[action['path']]})
++                elif op == 'command':
++                    if action['name'] not in conf.get('commands', {}):
++                        raise PolicyError('command not allowed')
++                    command = conf['commands'][action['name']]
++                    # Non-isolated commands are synchronous under lease fence: reclaimed
++                    # workers cannot commit staged outputs after another worker claims.
++                    def command_effect(c):
++                        output = sandbox_command(root, command, min(ledger.budget['max_command_seconds'],
++                                                 ledger.budget['max_seconds']-ledger.seconds))
++                        capture = command['capture']
++                        payload = (canonical(output)+'\n').encode()
++                        owned_capture = f"vault/runs/{task['id']}/a{task['generation']}/commands/{action['name']}.json"
++                        atomic_write(confined(root, owned_capture), payload)
++                        engine._checkpoint(root, task, owned_capture, checkpoints, 'command', c)
++                        atomic_write(confined(root, capture), payload)
++                        engine._checkpoint(root, task, capture, checkpoints, 'command_alias', c)
++                        for path in command.get('writes', []):
++                            if confined(root, path).is_file():
++                                engine._checkpoint(root, task, path, checkpoints, 'command_write', c)
++                        return {'capture': owned_capture, 'declared_capture': capture, 'exit_code': output['exit_code'], 'reason': output['reason'],
++                                'containment': output.get('containment', 'test-double')}
++                    receipt = await asyncio.to_thread(store.commit, task, command_effect)
++                    last = canonical(receipt) + '\nFull output is at capture pointer. Read it if needed.'
++                last_observation = last
++                store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
++                            'op': op, 'path_or_name': action.get('path', action.get('name')), 'receipt': last})
++            except (PolicyError, OSError, ValueError) as exc:
++                last = 'TOOL_DENIED: ' + str(exc)[:1500] + '\nLAST SUCCESSFUL TOOL OBSERVATION:\n' + last_observation
++                if len(last.encode()) > ledger.budget['max_observation_bytes']:
++                    last = 'TOOL_DENIED: ' + str(exc)[:1500] + '\nRe-read the last source using a smaller page before retrying.'
++                store.event('tool_denied', {'task': task['id'], 'op': op, 'reason': str(exc)})
++    except (Exception, asyncio.CancelledError) as exc:
++        reason = str(exc) or type(exc).__name__
++        manifest.update(status='failed', reason=reason, usage=ledger.totals())
++        store.event('run_aborted', {'task': task['id'], 'generation': task['generation'], **manifest})
++        try:
++            trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
++            if handoff:
++                trusted_write(handoff, (canonical({'status': 'error', 'reason': reason,
++                              'open_discrepancies': [reason], 'evidence': evidence})+'\n').encode())
++                if evidence:
++                    old = confined(root, evidence).read_bytes()
++                    trusted_write(evidence, old+(canonical({'event': 'honest_failure', 'reason': reason})+'\n').encode())
++            store.handoff(task, {'status': 'error', 'reason': reason, 'handoff': handoff, 'evidence': evidence,
++                                'manifest': manifest_path, 'usage': ledger.totals(),
++                                'budget_stopped': reason.startswith('circuit_breaker'),
++                                'budget_exceeded': (ledger.fresh > ledger.budget['max_fresh_tokens'] or
++                                                    ledger.calls > ledger.budget['max_calls'] or
++                                                    ledger.seconds > ledger.budget['max_seconds'])})
++            store.finish(task, 'FAILED', reason)
++            store.project_status(task['project_id'], 'ESCALATED', reason)
++        except LeaseLost:
++            pass
++    finally:
++        monitor.cancel()
++        await asyncio.gather(monitor, return_exceptions=True)
+--- reference/server_config.py
++++ optimal_harness/server_config.py
+@@ -0,0 +1,35 @@
++"""Read-only provenance for the shared MLX server's prompt-cache settings."""
++from __future__ import annotations
++import shlex
++import subprocess
++
++
++def discover_cache_configuration(port=8080):
++    try:
++        result = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, timeout=5)
++    except (OSError, subprocess.TimeoutExpired):
++        return {'source': 'live_process_argv', 'verified': False, 'reason': 'process inspection unavailable'}
++    if result.returncode != 0:
++        return {'source': 'live_process_argv', 'verified': False, 'reason': 'process inspection failed'}
++    candidates = []
++    for line in result.stdout.splitlines():
++        # ps is a display string, not shell-escaped argv; never shlex-parse it.
++        words = line.split()
++        if not any(w.endswith('mlx_lm.server') for w in words[1:3]) or '--port' not in words:
++            continue
++        def value(key):
++            try: return words[words.index(key)+1]
++            except (ValueError, IndexError): return None
++        if value('--port') != str(port):
++            continue
++        candidates.append({'source': 'live_process_argv', 'pid': int(words[0]),
++                           'prompt_cache_bytes': int(value('--prompt-cache-bytes') or 0),
++                           'prompt_cache_size': value('--prompt-cache-size'),
++                           'decode_concurrency': value('--decode-concurrency'),
++                           'prompt_concurrency': value('--prompt-concurrency')})
++    if len(candidates) != 1:
++        return {'source': 'live_process_argv', 'verified': False, 'reason': 'no unique matching MLX server'}
++    config = candidates[0]
++    config['verified'] = (0 < config['prompt_cache_bytes'] <= 268435456 and
++                          config['decode_concurrency'] == '1' and config['prompt_concurrency'] == '1')
++    return config
+--- reference/store.py
++++ optimal_harness/store.py
+@@ -37,6 +37,26 @@
+                     status TEXT NOT NULL, lease_owner TEXT, lease_until REAL,
+                     generation INTEGER NOT NULL DEFAULT 0, brief TEXT NOT NULL,
+                     failure TEXT NOT NULL DEFAULT '', FOREIGN KEY(project_id) REFERENCES projects(id)
++                );
++                CREATE TABLE IF NOT EXISTS defect_counts (
++                    project TEXT NOT NULL, defect TEXT NOT NULL, repeats INTEGER NOT NULL,
++                    PRIMARY KEY(project,defect)
++                );
++                CREATE TABLE IF NOT EXISTS attempt_usage (
++                    task TEXT NOT NULL, generation INTEGER NOT NULL,
++                    calls INTEGER NOT NULL DEFAULT 0, prompt INTEGER NOT NULL DEFAULT 0,
++                    cached INTEGER NOT NULL DEFAULT 0, completion INTEGER NOT NULL DEFAULT 0,
++                    fresh INTEGER NOT NULL DEFAULT 0, started REAL NOT NULL,
++                    PRIMARY KEY(task,generation)
++                );
++                CREATE TABLE IF NOT EXISTS checkpoints (
++                    task TEXT NOT NULL, generation INTEGER NOT NULL, project TEXT NOT NULL,
++                    path TEXT NOT NULL, sha256 TEXT NOT NULL, archive TEXT NOT NULL,
++                    PRIMARY KEY(task,generation,path)
++                );
++                CREATE TABLE IF NOT EXISTS handoffs (
++                    task TEXT NOT NULL, generation INTEGER NOT NULL, body TEXT NOT NULL,
++                    PRIMARY KEY(task,generation)
+                 );
+                 CREATE TABLE IF NOT EXISTS events (
+                     seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL,
+@@ -112,6 +132,7 @@
+             gen = row["generation"] + 1
+             c.execute("""UPDATE tasks SET status='RUNNING', lease_owner=?, lease_until=?,
+                 generation=? WHERE id=?""", (owner, now + lease_seconds, gen, row["id"]))
++            c.execute('INSERT INTO attempt_usage(task,generation,started) VALUES(?,?,?)', (row['id'], gen, now))
+             self._event(c, "task_claimed", {"task": row["id"], "owner": owner,
+                                             "generation": gen, "reclaimed": row["status"] == "RUNNING"})
+             return dict(row) | {"generation": gen, "lease_owner": owner,
+@@ -143,6 +164,60 @@
+                     lease_until=NULL WHERE id=?""", (status, reason, task["id"]))
+             self._event(c, "task_finished", {"task": task["id"], "status": status, "reason": reason})
+ 
++    def commit(self, task: dict, effect, allow_report=False):
++        """Fence filesystem commit against concurrent reclaim using BEGIN IMMEDIATE."""
++        with self.transaction() as c:
++            self._assert(c, task)
++            if not allow_report and self._meter_status(c, task)["budget_exceeded"]:
++                from .ledger import BudgetExceeded
++                raise BudgetExceeded("circuit_breaker:board_attempt_budget")
++            result = effect(c)
++            self._assert(c, task)
++            return result
++
++    def checkpoint(self, c, task, path, sha256, archive):
++        c.execute('INSERT OR REPLACE INTO checkpoints VALUES(?,?,?,?,?,?)',
++                  (task['id'], task['generation'], task['project_id'], path, sha256, archive))
++        self._event(c, 'artifact_checkpoint', {'task': task['id'], 'generation': task['generation'],
++                    'project': task['project_id'], 'path': path, 'sha256': sha256, 'archive': archive})
++
++    def checkpoints(self, project):
++        with self.transaction() as c:
++            return [dict(r) for r in c.execute('SELECT * FROM checkpoints WHERE project=? ORDER BY rowid', (project,))]
++
++    @staticmethod
++    def _meter_status(c, task):
++        from .ledger import DEFAULT_BUDGET
++        row = c.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()
++        plan = json.loads(c.execute('SELECT plan FROM projects WHERE id=?', (row['project_id'],)).fetchone()['plan'])
++        budget = DEFAULT_BUDGET | plan['stages'][row['stage']].get('budget', {})
++        usage = dict(c.execute('SELECT * FROM attempt_usage WHERE task=? AND generation=?', (task['id'], task['generation'])).fetchone())
++        wall = time.time() - usage['started']
++        exceeded = (usage['fresh'] > budget['max_fresh_tokens'] or usage['calls'] > budget['max_calls'] or wall > budget['max_seconds'])
++        stop = exceeded or usage['fresh'] >= budget['max_fresh_tokens'] or usage['calls'] >= budget['max_calls'] or wall >= budget['max_seconds']
++        return {'usage': usage, 'stop': stop, 'budget_exceeded': exceeded}
++
++    def meter(self, task, prompt=0, cached=0, completion=0, calls=1):
++        if any(type(n) is not int or n < 0 for n in (prompt, cached, completion, calls)) or cached > prompt:
++            raise ValueError('invalid usage delta')
++        with self.transaction() as c:
++            self._assert(c, task)
++            c.execute('UPDATE attempt_usage SET calls=calls+?,prompt=prompt+?,cached=cached+?,completion=completion+?,fresh=fresh+? WHERE task=? AND generation=?',
++                      (calls,prompt,cached,completion,prompt-cached+completion,task['id'],task['generation']))
++            status = self._meter_status(c, task)
++            self._event(c, 'attempt_meter', {'task': task['id'], 'generation': task['generation'], **status})
++            return status
++
++    def handoff(self, task, body):
++        """Accept reports despite budget flags; never accept a stale generation."""
++        with self.transaction() as c:
++            self._assert(c, task)
++            status = self._meter_status(c, task)
++            body = dict(body) | {"trusted_meter": status["usage"], "budget_exceeded": status["budget_exceeded"] or bool(body.get("budget_exceeded"))}
++            c.execute('INSERT OR REPLACE INTO handoffs VALUES(?,?,?)',
++                      (task['id'], task['generation'], canonical(body)))
++            self._event(c, 'handoff_accepted', {'task': task['id'], 'generation': task['generation'], **body})
++
+     def project(self, project: str) -> dict:
+         with self.transaction() as c:
+             row = c.execute("SELECT * FROM projects WHERE id=?", (project,)).fetchone()
+@@ -166,7 +241,8 @@
+     def failure_cycle(self, project: str, defect: str) -> tuple[int, int]:
+         with self.transaction() as c:
+             row = c.execute("SELECT cycle,defect,repeats FROM projects WHERE id=?", (project,)).fetchone()
+-            n = row["repeats"] + 1 if defect == row["defect"] else 1
++            c.execute("INSERT INTO defect_counts(project,defect,repeats) VALUES(?,?,1) ON CONFLICT(project,defect) DO UPDATE SET repeats=repeats+1", (project,defect))
++            n = c.execute("SELECT repeats FROM defect_counts WHERE project=? AND defect=?", (project,defect)).fetchone()["repeats"]
+             cycle = row["cycle"] + 1
+             c.execute("UPDATE projects SET cycle=?,defect=?,repeats=? WHERE id=?", (cycle, defect, n, project))
+             self._event(c, "failed_cycle", {"project": project, "cycle": cycle, "defect": defect, "repeats": n})
+--- reference/validation.py
++++ optimal_harness/validation.py
+@@ -0,0 +1,58 @@
++"""Cross-role proofs over file AND command effects, including directory scopes."""
++from __future__ import annotations
++from pathlib import Path
++from .policy import PolicyError, normalized, confined
++
++
++def overlaps(a, b):
++    def covers(scope, path):
++        return scope == path or (scope.endswith('/**') and path.startswith(scope[:-2]))
++    return covers(a, b) or covers(b, a)
++
++
++def prove(plan, root, grader_file):
++    immutable = [plan['spec'], *plan.get('immutable_inputs', [])]
++    impl, tests = plan.get('implementation_paths', []), plan.get('qa_test_paths', [])
++    wiring = plan.get('wiring_paths', [])
++    machines = [cmd['capture'] for c in plan['stages'].values() for cmd in c.get('commands', {}).values()]
++    private_files = [p for p in grader_file.parent.rglob('*') if p.is_file()]
++    if any(overlaps(p, q) for p in machines for q in immutable + impl + tests):
++        raise PolicyError("machine receipt overlaps protected or code path")
++    for role, c in plan['stages'].items():
++        reads = c.get('reads', [])
++        writes = c.get('writes', []) + c.get('writable', [])
++        command_writes = [p for cmd in c.get('commands', {}).values() for p in cmd.get('writes', [])]
++        effects = writes + command_writes
++        for p in reads + effects + c.get('command_only', []) + c.get('deliverables', []) + machines:
++            normalized(p)
++            if p.startswith(('vault/', '.harness/', '.git/')) or p in ('vault', '.harness', '.git'):
++                raise PolicyError('reserved runtime namespace')
++            full = confined(root, p[:-3] if p.endswith('/**') else p)
++            candidates = list(full.rglob('*')) if p.endswith('/**') and full.is_dir() else [full]
++            for f in candidates:
++                if f.is_symlink():
++                    raise PolicyError('symlink plan scope')
++                if f.exists() and any(f.samefile(g) for g in private_files):
++                    raise PolicyError('leaked-grader plan rejected')
++        if any(overlaps(p, q) for p in effects for q in immutable + machines):
++            raise PolicyError('immutable input or machine receipt is writable')
++        if role != 'QA' and any(overlaps(p, q) for p in effects for q in tests):
++            raise PolicyError('only QA writes acceptance tests, including commands')
++        if role == 'QA' and any(overlaps(p, q) for p in reads + effects for q in impl):
++            raise PolicyError('QA cannot read/write implementation')
++        if role == 'INTEGRATOR':
++            for p in effects:
++                if any(overlaps(p, q) for q in impl) and p not in wiring:
++                    raise PolicyError('integrator requires exact declared wiring path')
++        if role == 'REVIEW':
++            other = [p for r, cfg in plan['stages'].items() if r != 'REVIEW' for p in cfg.get('deliverables', [])]
++            if any(overlaps(p, q) for p in effects for q in other):
++                raise PolicyError('review cannot mutate prior deliverables')
++        for cmd in c.get('commands', {}).values():
++            mounts = cmd.get('reads', []) + cmd.get('writes', [])
++            if any(p.endswith('/**') for p in mounts):
++                raise PolicyError('commands require exact file mounts')
++            if any(p not in effects for p in cmd.get('writes', [])):
++                raise PolicyError('undeclared command write')
++            if type(cmd.get('requires_isolation', False)) is not bool:
++                raise PolicyError('requires_isolation must be boolean')
+--- reference/verifier.py
++++ optimal_harness/verifier.py
+@@ -35,6 +35,7 @@
+ 
+ class Verifier:
+     def __init__(self, root: Path, grader_dir: Path | None = None):
++        self.receipts = []
+         self.root = root.resolve(strict=True)
+         self.grader_dir = grader_dir.resolve(strict=True) if grader_dir else None
+ 
+@@ -67,7 +68,19 @@
+                     visit(v, f"{label}.{k}")
+ 
+         try:
+-            visit(self.json(path), path)
++            text = self.text(path)
++            if path.endswith(".jsonl"):
++                values = [json.loads(line) for line in text.splitlines() if line.strip()]
++            elif path.endswith(".json"):
++                values = [json.loads(text)]
++            else:
++                import re
++                try:
++                    values = [json.loads(text)]
++                except ValueError:
++                    values = [json.loads(m) for m in re.findall(r"```json\s*(.*?)```", text, re.S)]
++            for value in values:
++                visit(value, path)
+         except (OSError, ValueError, KeyError, PolicyError, TypeError) as exc:
+             errors.append(f"{path}: invalid structured evidence: {exc}")
+         return errors
+@@ -101,9 +114,16 @@
+         return errors
+ 
+     def check(self, item: dict) -> str | None:
+-        kind = item["type"]
++        kind = item.get("type") if isinstance(item, dict) else None
+         try:
+-            if kind == "exists":
++            from .checks import KINDS, check
++            if kind in KINDS:
++                return check(self, item)
++            if kind == "discrepancy-free":
++                value = self.json(item["path"]).get(item["key"])
++                if not isinstance(value, list) or value:
++                    return "unresolved structured discrepancies:" + item["key"]
++            elif kind == "exists":
+                 p = confined(self.root, item["path"])
+                 if not p.is_file() or (item.get("nonempty", True) and p.stat().st_size == 0):
+                     return f"{item['path']}: missing or empty"
+@@ -150,9 +170,11 @@
+                 private_name = normalized(item["test_file"])
+                 private_test = confined(self.grader_dir, private_name)
+                 config = {"argv": item["argv"], "reads": item["reads"],
+-                          "timeout_seconds": item.get("timeout_seconds", 30)}
++                          "timeout_seconds": item.get("timeout_seconds", 30),
++                          "requires_isolation": item.get("requires_isolation", False)}
+                 result = sandbox_command(self.root, config, config["timeout_seconds"],
+                                          {"grader_hidden_test.py": private_test})
++                self.receipts.append(result)
+                 if result["exit_code"] != 0:
+                     return "independent acceptance failed: " + (result["stderr"] or result["stdout"])[-600:]
+             elif kind == "json_value":
+@@ -168,7 +190,7 @@
+         results = []
+         for i, item in enumerate(checks):
+             reason = self.check(item)
+-            results.append({"index": i, "type": item.get("type"), "passed": reason is None, "error": reason})
++            results.append({"index": i, "type": item.get("type") if isinstance(item, dict) else None, "passed": reason is None, "error": reason})
+         return {"passed": all(r["passed"] for r in results),
+                 "open_discrepancies": sum(not r["passed"] for r in results),
+                 "results": results}
+@@ -178,6 +200,8 @@
+     """Validate coordinator-authored plan, including cross-role immutability."""
+     if not grader_file.is_file():
+         raise PolicyError("private independent acceptance file not found")
++    from .validation import prove
++    prove(plan, root, grader_file)
+     stages = plan["stages"]
+     required = {"INTAKE", "CODER", "INTEGRATOR", "QA", "FIXER", "REVIEW"}
+     if set(stages) != required:
+@@ -200,12 +224,14 @@
+                 raise PolicyError("empty command")
+             cmounts = set(map(normalized, command.get("reads", []) + command.get("writes", [])))
+             command_only = set(map(normalized, config.get("command_only", [])))
+-            if not cmounts <= reads | writes | command_only:
++            from .validation import overlaps
++            if not all(any(overlaps(p, s) for s in reads | writes | command_only) for p in cmounts):
+                 raise PolicyError("command mount outside declared stage files")
+             capture = normalized(command["capture"])
+             captures.add(capture)
+             machine.add(capture)
+-        if not deliverables <= writes | captures:
++        from .validation import overlaps
++        if not all(any(overlaps(p, s) for s in writes | captures) for p in deliverables):
+             raise PolicyError(f"{role}: deliverables must be writable or machine-generated")
+         if not captures <= deliverables:
+             raise PolicyError(f"{role}: every command receipt must be a declared deliverable")

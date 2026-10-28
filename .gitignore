@@ -4,3 +4,5 @@ references/
 *.log
 build-usage.json
 runs/*/work/
+*.sqlite3-shm
+*.sqlite3-wal

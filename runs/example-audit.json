@@ -1,0 +1,416 @@
+[
+  {
+    "run": "wordcounter-01",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "59de22cacc7a4632",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "error:no_progress:invalid_actions"
+      }
+    ],
+    "calls_started": 3,
+    "calls_with_server_usage": 3,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 2198,
+      "cached_tokens": 1373,
+      "completion_tokens": 673,
+      "fresh_tokens": 1498
+    },
+    "event_chain_valid": true,
+    "event_count": 13,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-02",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "19c348b6ae0541f1",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "error:no_progress:repeated_action"
+      }
+    ],
+    "calls_started": 4,
+    "calls_with_server_usage": 4,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 4009,
+      "cached_tokens": 2877,
+      "completion_tokens": 72,
+      "fresh_tokens": 1204
+    },
+    "event_chain_valid": true,
+    "event_count": 18,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-03",
+    "projects": [],
+    "tasks": [],
+    "calls_started": 0,
+    "calls_with_server_usage": 0,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 0,
+      "cached_tokens": 0,
+      "completion_tokens": 0,
+      "fresh_tokens": 0
+    },
+    "event_chain_valid": true,
+    "event_count": 0,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": false
+  },
+  {
+    "run": "wordcounter-04",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "b59cb5ece8974ef4",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "error:no_progress:repeated_action"
+      }
+    ],
+    "calls_started": 4,
+    "calls_with_server_usage": 4,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 4257,
+      "cached_tokens": 3483,
+      "completion_tokens": 72,
+      "fresh_tokens": 846
+    },
+    "event_chain_valid": true,
+    "event_count": 18,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-05",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "a717cca37e2c4dd2",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "intake_spec_gaps:intake unreadable: 'slots'"
+      }
+    ],
+    "calls_started": 5,
+    "calls_with_server_usage": 5,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 4999,
+      "cached_tokens": 3256,
+      "completion_tokens": 1029,
+      "fresh_tokens": 2772
+    },
+    "event_chain_valid": true,
+    "event_count": 22,
+    "pin_errors": [],
+    "checkpoint_errors": [
+      "current differs:vault/runs/a717cca37e2c4dd2/a1/handoff.json"
+    ],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-06",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "d3504991535f436b",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "CancelledError"
+      }
+    ],
+    "calls_started": 33,
+    "calls_with_server_usage": 32,
+    "unmetered_started_calls": 1,
+    "known_usage_only": {
+      "prompt_tokens": 36310,
+      "cached_tokens": 22715,
+      "completion_tokens": 8326,
+      "fresh_tokens": 21921
+    },
+    "event_chain_valid": true,
+    "event_count": 117,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": false
+  },
+  {
+    "run": "wordcounter-07",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "7af575ed2de1435c",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "citation_check_failed:artifacts/intake.json: non-verbatim quote or missing because-clause"
+      }
+    ],
+    "calls_started": 6,
+    "calls_with_server_usage": 6,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 6362,
+      "cached_tokens": 3634,
+      "completion_tokens": 1290,
+      "fresh_tokens": 4018
+    },
+    "event_chain_valid": true,
+    "event_count": 24,
+    "pin_errors": [],
+    "checkpoint_errors": [
+      "current differs:vault/runs/7af575ed2de1435c/a1/handoff.json"
+    ],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-08",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "97789b4a825440f4",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "intake_spec_gaps:intake slots must exactly equal pinned lifecycle matrix"
+      }
+    ],
+    "calls_started": 4,
+    "calls_with_server_usage": 4,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 4618,
+      "cached_tokens": 1924,
+      "completion_tokens": 729,
+      "fresh_tokens": 3423
+    },
+    "event_chain_valid": true,
+    "event_count": 24,
+    "pin_errors": [],
+    "checkpoint_errors": [
+      "current differs:vault/runs/97789b4a825440f4/a1/handoff.json"
+    ],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-09",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "66991a87754c42f3",
+        "stage": "INTAKE",
+        "status": "SUCCEEDED",
+        "cycle": 0,
+        "failure": ""
+      },
+      {
+        "id": "fb5bb35bb1cb4ecf",
+        "stage": "REVIEW",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "review_missing_counterexample_pass_or_schema"
+      }
+    ],
+    "calls_started": 8,
+    "calls_with_server_usage": 8,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 8914,
+      "cached_tokens": 4170,
+      "completion_tokens": 882,
+      "fresh_tokens": 5626
+    },
+    "event_chain_valid": true,
+    "event_count": 46,
+    "pin_errors": [],
+    "checkpoint_errors": [
+      "current differs:vault/runs/fb5bb35bb1cb4ecf/a1/handoff.json"
+    ],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-10",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "c97f6d4af57b4afa",
+        "stage": "INTAKE",
+        "status": "SUCCEEDED",
+        "cycle": 0,
+        "failure": ""
+      },
+      {
+        "id": "2cb6f9b81eb34136",
+        "stage": "REVIEW",
+        "status": "SUCCEEDED",
+        "cycle": 0,
+        "failure": ""
+      },
+      {
+        "id": "200811dceefb4992",
+        "stage": "CODER",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "error:no_progress:invalid_actions"
+      }
+    ],
+    "calls_started": 13,
+    "calls_with_server_usage": 13,
+    "unmetered_started_calls": 0,
+    "known_usage_only": {
+      "prompt_tokens": 15232,
+      "cached_tokens": 7947,
+      "completion_tokens": 26348,
+      "fresh_tokens": 33633
+    },
+    "event_chain_valid": true,
+    "event_count": 68,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-stage-02",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "ESCALATED"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "e515cf6441c146ab",
+        "stage": "INTAKE",
+        "status": "FAILED",
+        "cycle": 0,
+        "failure": "model_queue_timeout_before_execution"
+      }
+    ],
+    "calls_started": 1,
+    "calls_with_server_usage": 0,
+    "unmetered_started_calls": 1,
+    "known_usage_only": {
+      "prompt_tokens": 0,
+      "cached_tokens": 0,
+      "completion_tokens": 0,
+      "fresh_tokens": 0
+    },
+    "event_chain_valid": true,
+    "event_count": 8,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": true
+  },
+  {
+    "run": "wordcounter-verify-01",
+    "projects": [
+      {
+        "id": "wordcounter",
+        "status": "RUNNING"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "669f6f1aab4245f9",
+        "stage": "INTAKE",
+        "status": "SUCCEEDED",
+        "cycle": 0,
+        "failure": ""
+      },
+      {
+        "id": "8ac8f688913048a3",
+        "stage": "REVIEW",
+        "status": "SUCCEEDED",
+        "cycle": 0,
+        "failure": ""
+      },
+      {
+        "id": "4a92c24862e44644",
+        "stage": "CODER",
+        "status": "RUNNING",
+        "cycle": 0,
+        "failure": ""
+      }
+    ],
+    "calls_started": 11,
+    "calls_with_server_usage": 10,
+    "unmetered_started_calls": 1,
+    "known_usage_only": {
+      "prompt_tokens": 12649,
+      "cached_tokens": 6076,
+      "completion_tokens": 3532,
+      "fresh_tokens": 10105
+    },
+    "event_chain_valid": true,
+    "event_count": 55,
+    "pin_errors": [],
+    "checkpoint_errors": [],
+    "result_file_exists": false
+  }
+]

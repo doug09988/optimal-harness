@@ -18,6 +18,14 @@ The worktree already contained lease and command-receipt changes when this task 
 - `python3 -m unittest tests.test_runtime tests.test_harness tests.test_adversarial`: 59 passed, 2 errors solely because sandboxed loopback socket bind is forbidden (`PermissionError: [Errno 1] Operation not permitted`).
 - The seven `tests.test_model` tests likewise cannot initialize their local HTTP servers in this sandbox.
 - `git diff --check`: passed.
-- Attempted `PYTHONPATH=. python3 examples/run_local.py --run-dir runs/wordcounter-stage-02` with the default endpoint/model. The first model call could not execute here. A direct request to the same local endpoint confirmed `ModelError: local model request failed: <urlopen error [Errno 1] Operation not permitted>`.
+- Attempted `PYTHONPATH=. python3 examples/run_local.py --run-dir runs/wordcounter-stage-02` with the default endpoint/model. The run exited 1 after waiting for the shared model lock. Exact `result.json` project status: `ESCALATED`; INTAKE task status: `FAILED`; failure: `model_queue_timeout_before_execution`; audit valid: `true`; integrity errors: `[]`. No model completion executed. A direct request to the same local endpoint confirmed `ModelError: local model request failed: <urlopen error [Errno 1] Operation not permitted>`.
 
 Live execution is stopped under the task's loopback restriction instruction. Coordinator execution outside this sandbox remains required; AWAITING_COORDINATOR is not claimed.
+
+The pre-existing modified `runs/wordcounter-10/board.sqlite3-shm` and stage prompt were present or generated; my requested `git add -A` was blocked.
+
+## Commit blocker
+
+Attempted `git add -A` and `git commit -m "STAGE-02: recover intake format variance with bounded schema feedback"`. Both failed because this sandbox exposes `.git` as read-only: `fatal: Unable to create '/Users/argus/optimal-harness/.git/index.lock': Operation not permitted`. No commit was created. The coordinator must stage and commit the saved changes on the current branch outside this sandbox.
+
+Concurrent workspace update observed afterward: HEAD is now `1f8b803` (`Stage 2: intake format robustness for word-counter (skeleton charter, slot validation, bounded format retries)`), containing the implementation and tests. That commit was created outside my sandbox. This updated result note and generated run records remain uncommitted; unrelated concurrent files were left alone.
