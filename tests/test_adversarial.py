@@ -36,6 +36,8 @@ class Adversarial(unittest.TestCase):
         example = BASE / 'examples' / 'word-counter'
         shutil.copytree(example / 'work', self.root)
         shutil.copytree(example / 'grader', self.grader)
+        (self.root / "artifacts").mkdir(parents=True, exist_ok=True)
+        (self.root / "reports").mkdir(parents=True, exist_ok=True)
         self.plan = json.loads((example / 'plan.json').read_text())
         self.store = Store(self.base / 'board.db')
         self.engine = Engine(self.store, FakeQueue([]))

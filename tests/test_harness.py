@@ -50,6 +50,8 @@ class HarnessTest(unittest.TestCase):
         shutil.copytree(EXAMPLE / "work", self.root)
         self.grader_dir = self.base / "private_grader"
         shutil.copytree(EXAMPLE / "grader", self.grader_dir)
+        (self.root / "artifacts").mkdir(parents=True, exist_ok=True)
+        (self.root / "reports").mkdir(parents=True, exist_ok=True)
         self.plan = json.loads((EXAMPLE / "plan.json").read_text())
         self.store = Store(self.base / "board.sqlite")
 
