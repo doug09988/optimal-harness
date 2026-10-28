@@ -27,3 +27,14 @@ its last successful receipt; never resend accepted bytes. A denied or malformed
 action writes no bytes: retry that chunk smaller. Do not finish or write a ready
 handoff until every file has its final chunk accepted. Chunking grants no new
 paths or acceptance authority.
+
+Handoff artifact skeleton (use the exact handoff_path from SAVED RUN STATE):
+{"action":"write","path":"<handoff_path>","data":{"status":"ready","open_discrepancies":[],"summary":"Factual files written and limitations observed"},"more":false}
+The artifact itself is the data object, not the action wrapper. status must be
+"ready" and open_discrepancies must be a JSON list. Record actual unresolved
+concerns in that list; never omit it. summary is factual, not certification.
+Finish only after every deliverable named by the plan is nonempty, checkpointed,
+and has its final chunk accepted, and this complete handoff write succeeds.
+Schema or readiness feedback names the field or deliverable to repair. Rewrite
+the complete handoff when asked; do not repeat finish without correcting it.
+Three invalid handoff writes or readiness attempts exhaust the correction budget.

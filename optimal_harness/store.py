@@ -216,7 +216,8 @@ class Store:
             body = dict(body) | {"trusted_meter": status["usage"], "budget_exceeded": status["budget_exceeded"] or bool(body.get("budget_exceeded"))}
             c.execute('INSERT OR REPLACE INTO handoffs VALUES(?,?,?)',
                       (task['id'], task['generation'], canonical(body)))
-            self._event(c, 'handoff_accepted', {'task': task['id'], 'generation': task['generation'], **body})
+            kind = 'handoff_error_reported' if body.get('status') == 'error' else 'handoff_accepted'
+            self._event(c, kind, {'task': task['id'], 'generation': task['generation'], **body})
 
     def project(self, project: str) -> dict:
         with self.transaction() as c:

@@ -1,0 +1,34 @@
+# STAGE-04 — FIXER: CODER handoff conformance
+
+Role: FIXER. The coordinator (Doofy) verifies independently. You
+are on git branch codex/stage-04-handoff in ~/optimal-harness.
+Your sandbox mounts .git READ-ONLY: do not attempt commits; leave
+the worktree complete and say so in your result file — the
+coordinator commits.
+
+DEFECT (coordinator-verified): run runs/wordcounter-verify-02 —
+INTAKE and REVIEW pass; CODER writes wordfreq.py successfully
+(stage 3's chunked writes work) and reaches finish in 7 calls,
+then FAILS: handoff_not_ready_or_malformed (board events 72-81).
+The worker hand-wrote vault/runs/c0d3e4caf04f410e/a1/handoff.json
+(280 bytes) before its finish action; a handoff_accepted event
+fires and the task still fails readiness. Read that handoff.json,
+the run's submitted-plan.json (CODER deliverables), and the
+runtime's readiness check to find the exact mismatch.
+
+TASK: Make CODER handoffs conform. Proven pattern from stages
+2-3: an exact artifact skeleton in the role charter;
+deterministic pre-finish validation that names the failing field
+or deliverable and returns corrective feedback with bounded
+retries; reconcile the accept-then-fail sequence (gate readiness
+before the acceptance event, or name the two events distinctly).
+NON-NEGOTIABLE: gate/verifier strictness unchanged in substance;
+plan spec and examples/word-counter/grader immutable;
+write-scoping unchanged. Standard library only.
+
+EXECUTION: your sandbox cannot reach the model endpoint
+(loopback) — do not attempt the live run; the coordinator
+executes it. Deliverables: code + tests, and
+stages/STAGE-04-result.md stating what mismatched, what changed,
+and exact sandbox test outcomes. Never modify ~/harness or
+~/vault.

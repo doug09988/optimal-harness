@@ -18,6 +18,7 @@ from .ledger import Ledger, DEFAULT_BUDGET
 from .policy import FileBroker, PolicyError, atomic_write, confined, normalized, sandbox_command
 from .store import LeaseLost, Store, canonical
 from .verifier import Verifier, digest, validate_plan
+from .handoff import ready_document
 
 
 STAGE_NEXT = {
@@ -172,9 +173,10 @@ class Engine:
                                                          spec if task["stage"] == "INTAKE" else None)
                 if errors:
                     raise RuntimeError("citation_check_failed:" + ";".join(errors)[:600])
-        data = json.loads(confined(root, handoff).read_text())
-        if data.get("status") != "ready" or not isinstance(data.get("open_discrepancies"), list):
-            raise RuntimeError("handoff_not_ready_or_malformed")
+        try:
+            data = ready_document(confined(root, handoff).read_text())
+        except ValueError as exc:
+            raise RuntimeError("handoff_not_ready_or_malformed:" + str(exc)) from exc
         if data.get('open_discrepancies'):
             self.store.event('handoff_discrepancies', {'task': task['id'], 'count': len(data['open_discrepancies'])})
         if task["stage"] == "INTAKE":

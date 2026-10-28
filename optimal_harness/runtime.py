@@ -8,6 +8,7 @@ from .ledger import Ledger
 from .model import SYSTEM_PREFIX, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
+from .handoff import ready_document
 
 
 def intake_document(data):
@@ -54,6 +55,8 @@ async def run_task(engine, task):
     intake_format_errors = 0
     partial = set()
     coder_size_errors = 0
+    coder_handoff_errors = 0
+    finish_feedback = ''
     chunk_limit = min(4096, max(1, int(ledger.budget['max_completion_tokens']) - 512))
     chunk_feedback = (f'CODER action size: action may be truncated or oversized. Use a smaller chunk; '
                       f'ONE complete JSON action at most {chunk_limit} UTF-8 bytes including escaping. '
@@ -126,6 +129,8 @@ async def run_task(engine, task):
                 next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
             if ledger.calls == 0 and plan['spec'] in task['brief']['permitted_reads']:
                 next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
+            if finish_feedback:
+                next_step = finish_feedback
             prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
             prompt += '\nCompleted model calls in this attempt: ' + str(ledger.calls)
             if last.startswith('{') and '"content":' in last:
@@ -188,7 +193,19 @@ async def run_task(engine, task):
             if op == 'finish':
                 if partial:
                     raise RuntimeError('incomplete_chunked_files:' + ','.join(sorted(partial)))
-                engine._check_stage(root, task, conf, checkpoints, handoff)
+                try:
+                    engine._check_stage(root, task, conf, checkpoints, handoff)
+                except RuntimeError as exc:
+                    if task['stage'] != 'CODER' or not str(exc).startswith((
+                            'handoff_not_ready_or_malformed', 'error:missing_deliverables:')):
+                        raise
+                    coder_handoff_errors += 1
+                    if coder_handoff_errors >= 3:
+                        raise RuntimeError('coder_handoff_exhausted:' + str(exc)) from exc
+                    finish_feedback = 'Correct readiness failure before finish: ' + str(exc)
+                    last = finish_feedback
+                    store.event('handoff_validation_denied', {'task': task['id'], 'reason': str(exc)})
+                    continue
                 manifest.update(status='succeeded', usage=ledger.totals())
                 trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
                 store.handoff(task, {'status': 'ready', 'evidence': evidence, 'handoff': handoff,
@@ -212,6 +229,17 @@ async def run_task(engine, task):
                         raise PolicyError('encoded read page exceeds observation budget; reduce length')
                 elif op in ('write', 'append'):
                     data = action["data"]
+                    if task['stage'] == 'CODER' and action['path'] == handoff:
+                        try:
+                            if op != 'write' or action.get('more', False):
+                                raise ValueError('handoff requires one complete write with more=false')
+                            data = ready_document(data)
+                        except ValueError as exc:
+                            coder_handoff_errors += 1
+                            if coder_handoff_errors >= 3:
+                                raise RuntimeError('coder_handoff_exhausted:' + str(exc)) from exc
+                            raise PolicyError('CODER handoff schema: ' + str(exc) +
+                                              '. Rewrite the complete handoff object; then finish.') from exc
                     if 'more' in action and task['stage'] != 'CODER':
                         raise PolicyError('chunk marker more is only supported for CODER')
                     if task['stage'] == 'INTAKE' and action['path'] in conf.get('deliverables', []):
@@ -235,6 +263,7 @@ async def run_task(engine, task):
                     if isinstance(data, (dict, list)):
                         data = canonical(data) + "\n"
                     count = write_checkpoint(action['path'], data, op == 'append')
+                    finish_feedback = ''
                     if action.get('more', False):
                         partial.add(action['path'])
                     else:

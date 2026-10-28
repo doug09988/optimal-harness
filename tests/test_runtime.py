@@ -81,6 +81,75 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((self.root/'wordfreq.py').read_text(), 'α\nβ\n')
         self.assertEqual(self.engine.queue.calls, 7)
 
+    @staticmethod
+    def coder_handoff(data):
+        def action(prompt):
+            import re
+            path = re.search(r'vault/runs/[0-9a-f]{16}/a[0-9]+/handoff.json', prompt).group()
+            return {'action': 'write', 'path': path, 'data': data}
+        return action
+
+    def test_coder_handoff_missing_field_corrects_before_acceptance(self):
+        def corrected(prompt):
+            self.assertIn('handoff.open_discrepancies', prompt)
+            self.assertIn('Rewrite the complete handoff', prompt)
+            return self.coder_handoff({'status': 'ready', 'open_discrepancies': []})(prompt)
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': '# implementation'},
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
+            self.coder_handoff({'status': 'ready', 'summary': 'same defect as archived run'}),
+            corrected, {'action': 'finish', 'summary': 'done'}])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        with self.store.transaction() as c:
+            kinds = [r[0] for r in c.execute('SELECT kind FROM events ORDER BY rowid')]
+        self.assertEqual(kinds.count('tool_denied'), 1)
+        self.assertLess(kinds.index('stage_checks_passed'), kinds.index('handoff_accepted'))
+
+    def test_coder_handoff_retries_bounded_and_error_event_distinct(self):
+        task = self.run_coder([self.coder_handoff(data) for data in (
+            {'status': 'ready'}, {'status': 'ready', 'open_discrepancies': None},
+            {'status': 'ready', 'open_discrepancies': 'none'})])
+        self.assertIn('coder_handoff_exhausted:handoff.open_discrepancies', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 3)
+        with self.store.transaction() as c:
+            kinds = [r[0] for r in c.execute('SELECT kind FROM events')]
+        self.assertNotIn('handoff_accepted', kinds)
+        self.assertIn('handoff_error_reported', kinds)
+        self.assertFalse(any(cp['path'].endswith('/handoff.json')
+                             for cp in self.store.checkpoints('wordcounter')))
+
+    def test_coder_premature_finish_names_missing_deliverables(self):
+        def correction(prompt):
+            self.assertIn('missing_or_uncheckpointed_deliverables:wordfreq.py,test_unit.py', prompt)
+            return {'action': 'write', 'path': 'wordfreq.py', 'data': '# code'}
+        task = self.run_coder([
+            {'action': 'finish', 'summary': 'premature'}, correction,
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
+            self.coder_handoff({'status': 'ready', 'open_discrepancies': ['known limitation']}),
+            {'action': 'finish', 'summary': 'done'}])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+
+    def test_coder_finish_revalidates_unwritten_handoff(self):
+        def corrected(prompt):
+            self.assertIn('handoff.status must equal ready', prompt)
+            self.assertIn('Correct readiness failure before finish', prompt)
+            return self.coder_handoff({'status': 'ready', 'open_discrepancies': []})(prompt)
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': '# code'},
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
+            {'action': 'finish', 'summary': 'no handoff yet'}, corrected,
+            {'action': 'finish', 'summary': 'done'}])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+
+    def test_handoff_shape_preserves_gate_predicate(self):
+        from optimal_harness.handoff import ready_document
+        for value in ('{bad', '[]', {}, {'status': 'done', 'open_discrepancies': []},
+                      {'status': 'ready', 'open_discrepancies': {}}):
+            with self.assertRaises(ValueError):
+                ready_document(value)
+        value = {'status': 'ready', 'open_discrepancies': ['unresolved']}
+        self.assertEqual(ready_document(json.dumps(value)), value)
+
     def test_coder_invalid_size_retries_are_bounded_without_writes(self):
         task = self.run_coder([{'action': 'write', 'path': 'wordfreq.py', 'data': 'x'*5000}] * 3)
         self.assertIn('coder_action_format_exhausted', task['failure'])

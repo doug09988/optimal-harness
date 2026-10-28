@@ -1,0 +1,68 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "86ff6dee84464cf0",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "ce171543d39341cd",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "683be26ed0454e4d",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "8f90e5acf90f4662",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "9cf9ff5455cb41a8",
+      "stage": "INTEGRATOR",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "402bf9dcdb5a4898",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "a4afc467d1d64530",
+      "stage": "QA",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "error:no_progress:repeated_action"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 187,
+    "head": "c435f45bbcf5b3e4783eae68b50152ba6118eee49a5f9495ecea06bbabb7725d"
+  },
+  "integrity_errors": []
+}
