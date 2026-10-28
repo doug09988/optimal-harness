@@ -124,13 +124,11 @@ async def run_task(engine, task):
     coder_handoff_errors = 0
     finish_feedback = ''
     chunk_limit = min(4096, max(1, int(ledger.budget['max_completion_tokens']) - 512))
-    chunk_feedback = (f"{task['stage']} action size: action may be truncated or oversized. Use a smaller chunk; "
-                      f'ONE complete JSON action at most {chunk_limit} UTF-8 bytes including escaping. '
-                      'First write with more=true, then append with more=true; final append more=false. '
-                      'Rejected actions wrote no bytes; retry only the rejected chunk.')
-    if raw_writer:
-        chunk_feedback = (chunk_feedback.replace('ONE complete JSON action', 'ONE complete action (raw header + separator + literal payload, or JSON)')
-                          .replace('including escaping', 'counting literal UTF-8 bytes for raw payloads'))
+    chunk_feedback = (f"{task['stage']} action size: send ONE complete action. "
+                      f'Write payloads are stored internally in chunks of at most {chunk_limit} UTF-8 bytes. '
+                      'The total file size must stay within the file limit. '
+                      'Use more=true while content remains; final append more=false. '
+                      'Rejected actions wrote no bytes; correct the reported problem before retrying.')
     manifest = {'task': task['id'], 'generation': task['generation'], 'role': task['stage'],
                 'budget': ledger.budget, 'budget_scope': 'shared_stage_task_all_generations', 'static_prefix_sha256': hashlib.sha256(SYSTEM_PREFIX.encode()).hexdigest(),
                 'charter_sha256': plan['charter_hashes'][f"vault/charters/{task['stage'].lower()}.md"],
@@ -148,11 +146,20 @@ async def run_task(engine, task):
                 engine._checkpoint(root, task, path, checkpoints, 'trusted_report', c)
         store.commit(task, effect, allow_report=True)
 
-    def write_checkpoint(path, data=None, append=False):
+    def write_checkpoint(path, data=None, append=False, chunks=None):
         def effect(c):
             count = None
             if data is not None:
-                count = broker.write(path, data, append=append)
+                if chunks is not None:
+                    payload = data.encode('utf-8')
+                    target = confined(root, path)
+                    old_size = target.stat().st_size if append and target.is_file() else 0
+                    if old_size + len(payload) > broker.max_bytes:
+                        raise PolicyError(f'write total file size exceeds file limit of {broker.max_bytes} UTF-8 bytes')
+                    for index, chunk in enumerate(chunks or ['']):
+                        count = broker.write(path, chunk, append=append or index > 0)
+                else:
+                    count = broker.write(path, data, append=append)
             engine._checkpoint(root, task, path, checkpoints, 'runtime', c)
             return count
         return store.commit(task, effect)
@@ -306,9 +313,9 @@ async def run_task(engine, task):
                     if not is_raw and result.text.lstrip()[end:].strip():
                         store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
                                     'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
-                    if len(first.encode('utf-8')) > chunk_limit:
-                        raise ModelError('encoded action exceeds chunk limit')
                     action = parse_action(first)
+                    if action['action'] not in ('write', 'append') and len(first.encode('utf-8')) > chunk_limit:
+                        raise ModelError('encoded action exceeds chunk limit')
                 except (ModelError, ValueError) as exc:
                     # A bounded correction is fresh, not replay of malformed history.
                     last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
@@ -323,7 +330,7 @@ async def run_task(engine, task):
                                             'exactly one action; use the raw write template for file content.')
                     last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
                     if action_format_errors >= 3:
-                        raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks; template: ' + template)
+                        raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized non-write actions; template: ' + template)
                     repeat += 1
                     if repeat >= 3:
                         raise RuntimeError('error:no_progress:invalid_actions')
@@ -399,7 +406,7 @@ async def run_task(engine, task):
                             raise PolicyError('structured append requires a staged first write')
                         data = (structured_chunks.get(path, '') if op == 'append' else '') + data
                         if len(data.encode('utf-8')) > broker.max_bytes:
-                            raise PolicyError('write exceeds file limit')
+                            raise PolicyError('write total file size exceeds file limit')
                         if action.get('more', False):
                             # Stage JSON fragments in memory. Nothing is written until
                             # the complete document passes the existing schema check.
@@ -448,7 +455,23 @@ async def run_task(engine, task):
                         if (path in checkpoints and target.is_file() and target.read_bytes() == data.encode('utf-8') and
                                 not Verifier(root).intake(path, plan['spec'])):
                             raise PolicyError(INTAKE_COMPLETE)
-                    count = write_checkpoint(action['path'], data, op == 'append')
+                    payload = data.encode('utf-8')
+                    chunks = []
+                    while payload:
+                        end = min(chunk_limit, len(payload))
+                        # Keep each storage unit within the byte cap and UTF-8 aligned.
+                        while end < len(payload) and payload[end] & 0xc0 == 0x80:
+                            end -= 1
+                        if not end:
+                            raise PolicyError('storage chunk limit cannot hold a UTF-8 character')
+                        chunks.append(payload[:end].decode('utf-8'))
+                        payload = payload[end:]
+                    count = write_checkpoint(action['path'], data, op == 'append', chunks=chunks)
+                    if len(chunks) > 1:
+                        store.event('oversized_accepted_split', {
+                            'task': task['id'], 'generation': task['generation'],
+                            'op': op, 'path': path, 'bytes': len(data.encode('utf-8')),
+                            'chunk_count': len(chunks), 'chunk_limit': chunk_limit})
                     structured_chunks.pop(action['path'], None)
                     finish_feedback = ''
                     if action.get('more', False):

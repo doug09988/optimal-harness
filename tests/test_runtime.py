@@ -65,7 +65,7 @@ class RuntimeTests(unittest.TestCase):
                 if role != 'INTAKE':
                     self.setUp()
                 task = self.run_coder([
-                    {'action': 'write', 'path': 'never-created', 'data': 'x'*5000}
+                    {'action': 'write', 'path': 'never-created', 'data': 'x'*5000, 'extra': True}
                 ] * 3, role=role)
                 self.assertIn('review_section_exhausted:reviewed_stage' if role == 'REVIEW' else role.lower() + '_action_format_exhausted', task['failure'])
                 self.assertEqual(self.engine.queue.calls, 3)
@@ -397,10 +397,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('handoff_error_reported', kinds)
         self.assertNotIn('handoff_accepted', kinds)
 
-    def test_coder_chunks_recover_from_truncation_and_oversize(self):
+    def test_coder_chunks_recover_from_truncation(self):
         import re
         def after_bad(prompt):
-            self.assertIn('Use a smaller chunk', prompt)
+            self.assertIn('correct the reported problem', prompt)
             self.assertIn('Rejected actions wrote no bytes', prompt)
             return {'action': 'write', 'path': 'wordfreq.py', 'data': 'α\n', 'more': True}
         def continuation(prompt):
@@ -412,13 +412,12 @@ class RuntimeTests(unittest.TestCase):
             return {'action': 'write', 'path': path, 'data': {'status': 'ready', 'open_discrepancies': []}}
         task = self.run_coder([
             '{"action":"write","path":"wordfreq.py","data":"truncated',
-            {'action': 'write', 'path': 'wordfreq.py', 'data': 'x' * 5000},
             after_bad, continuation,
             {'action': 'write', 'path': 'test_unit.py', 'data': '# tests\n'},
             handoff, {'action': 'finish', 'summary': 'done'}])
         self.assertEqual(task['status'], 'SUCCEEDED')
         self.assertEqual((self.root/'wordfreq.py').read_text(), 'α\nβ\n')
-        self.assertEqual(self.engine.queue.calls, 7)
+        self.assertEqual(self.engine.queue.calls, 6)
 
     @staticmethod
     def coder_handoff(data):
@@ -513,19 +512,63 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((self.root/'wordfreq.py').read_bytes(), ('prefix\n' + content + 'suffix').encode())
         self.assertEqual((self.root/'test_unit.py').read_bytes(), content.encode())
 
-    def test_raw_chunk_limit_counts_utf8_bytes_and_shows_raw_template(self):
-        def corrected(prompt):
-            self.assertIn('"format":"raw"', prompt)
-            self.assertIn('---CONTENT---', prompt)
-            self.assertIn('Rejected actions wrote no bytes', prompt)
-            self.assertFalse((self.root/'wordfreq.py').exists())
-            return self.raw_action('wordfreq.py', 'accepted')
+    def test_oversized_raw_and_json_writes_split_byte_exactly(self):
+        content = ('  "quotes" \\path\n---CONTENT---\n☃\r\n' * 180) + 'end\n'
+        from unittest.mock import patch
+        writes = []
+        original = FileBroker.write
+        def record(broker, path, data, append=False):
+            writes.append((path, data, append))
+            return original(broker, path, data, append)
+        with patch.object(FileBroker, 'write', record):
+            task = self.run_coder([
+                self.raw_action('wordfreq.py', content),
+                {'action': 'write', 'path': 'test_unit.py', 'data': content},
+                {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        for path in ('wordfreq.py', 'test_unit.py'):
+            self.assertEqual((self.root/path).read_bytes(), content.encode())
+        with self.store.transaction() as c:
+            events = c.execute("SELECT * FROM events WHERE kind='oversized_accepted_split'").fetchall()
+        self.assertEqual(len(events), 2)
+        for event in events:
+            payload = json.loads(event['payload'])
+            units = [(data, append) for path, data, append in writes if path == payload['path']]
+            self.assertEqual(payload['chunk_count'], len(units))
+            self.assertGreater(len(units), 1)
+            self.assertTrue(all(len(data.encode()) <= payload['chunk_limit'] for data, _ in units))
+            self.assertEqual([append for _, append in units], [False] + [True] * (len(units)-1))
+
+    def test_oversized_more_true_and_mixed_continuation(self):
+        content = '☃' * 2800
+        def continuation(prompt):
+            self.assertIn('Continue wordfreq.py using action=append', prompt)
+            return {'action': 'append', 'path': 'wordfreq.py', 'data': '\nend', 'more': False}
         task = self.run_coder([
-            self.raw_action('wordfreq.py', '☃' * 1400), corrected,
+            self.raw_action('wordfreq.py', content, more=True), continuation,
             self.raw_action('test_unit.py', '# tests'),
             {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}])
-        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'wordfreq.py').read_bytes(), (content + '\nend').encode())
+
+    def test_total_file_ceiling_denies_before_any_split_is_written(self):
+        def corrected(prompt):
+            self.assertIn('total file size exceeds file limit', prompt)
+            self.assertFalse((self.root/'wordfreq.py').exists())
+            return self.raw_action('wordfreq.py', 'accepted')
+        def append_denied(prompt):
+            self.assertIn('total file size exceeds file limit', prompt)
+            self.assertEqual((self.root/'wordfreq.py').read_bytes(), b'accepted')
+            return self.raw_action('test_unit.py', '# tests')
+        task = self.run_coder([
+            self.raw_action('wordfreq.py', '☃' * 43691), corrected,
+            {'action': 'append', 'path': 'wordfreq.py', 'data': 'x' * 131072},
+            append_denied,
+            {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual((self.root/'wordfreq.py').read_bytes(), b'accepted')
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='oversized_accepted_split'").fetchone()[0], 0)
 
     def test_raw_writes_retain_broker_scope_and_file_byte_caps(self):
         from optimal_harness.model import parse_action
@@ -568,8 +611,8 @@ class RuntimeTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(ModelError):
                 parse_action(text)
 
-    def test_coder_invalid_size_retries_are_bounded_without_writes(self):
-        task = self.run_coder([{'action': 'write', 'path': 'wordfreq.py', 'data': 'x'*5000}] * 3)
+    def test_coder_oversized_non_write_retries_are_bounded_without_writes(self):
+        task = self.run_coder([{'action': 'read', 'path': 'x'*5000}] * 3)
         self.assertIn('coder_action_format_exhausted', task['failure'])
         self.assertEqual(self.engine.queue.calls, 3)
         self.assertFalse((self.root/'wordfreq.py').exists())

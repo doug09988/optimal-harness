@@ -18,13 +18,12 @@ Use action=append for subsequent chunks; more=true while chunks remain and
 more=false for the final chunk (or a single complete file). Raw content needs
 no JSON escaping and may itself contain ---CONTENT--- lines. Preserve intended
 newlines, including the final newline. Raw and JSON chunks may mix.
-Keep each complete action within 4096 UTF-8 bytes (or the runtime's smaller
-limit), counting header, separator and literal payload bytes. Use smaller chunks
-for Unicode. For small content, JSON remains accepted:
+The runtime splits oversized write payloads into bounded storage chunks.
+The total file size must stay within the runtime's file limit. For small content, JSON remains accepted:
 {"action":"write","path":"declared.py","data":"small file\n","more":false}
 
 Wait for each receipt. Never resend accepted bytes. A denied action writes no
-bytes; retry only that chunk smaller. Finish only after every final chunk is
+bytes; correct the reported problem before retrying. Finish only after every final chunk is
 accepted. Chunking grants no new paths or acceptance authority.
 
 Do not hand-write handoff.json. Once deliverables are complete, emit
