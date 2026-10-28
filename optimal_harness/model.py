@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import errno
 import fcntl
+from http.client import RemoteDisconnected
 import json
 import multiprocessing
 import os
 from pathlib import Path
 import time
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, HTTPRedirectHandler
 
@@ -59,6 +62,8 @@ class Completion:
     prompt_tokens: int
     cached_tokens: int
     completion_tokens: int
+    transport_retries: int = 0
+    usage_unknown_for_failed_request: bool = False
 
     @property
     def fresh_tokens(self) -> int:
@@ -77,13 +82,49 @@ class LocalChatClient:
         self.url = url.rstrip("/").removesuffix("/v1") + "/v1/chat/completions"
         self.model = model
 
-    def complete(self, prompt: str, max_tokens: int, timeout: float) -> Completion:
+    @staticmethod
+    def _transient(exc: Exception) -> bool:
+        # HTTP status failures and timeouts must retain their existing behavior.
+        if isinstance(exc, (HTTPError, TimeoutError)):
+            return False
+        if isinstance(exc, URLError):
+            return isinstance(exc.reason, Exception) and LocalChatClient._transient(exc.reason)
+        return isinstance(exc, (RemoteDisconnected, ConnectionResetError,
+                                BrokenPipeError, ConnectionRefusedError,
+                                ConnectionAbortedError)) or (
+            isinstance(exc, OSError) and exc.errno in
+            (errno.ECONNRESET, errno.EPIPE, errno.ECONNREFUSED, errno.ECONNABORTED))
+
+    def complete(self, prompt: str, max_tokens: int, timeout: float,
+                 transport_retry=None) -> Completion:
+        request = self._request(prompt, max_tokens)
+        retries = 0
+        while True:
+            try:
+                result = self._complete_once(request, timeout)
+                return Completion(result.text, result.prompt_tokens, result.cached_tokens,
+                                  result.completion_tokens, retries, bool(retries))
+            except ModelError as exc:
+                if retries >= 2 or not self._transient(exc.__cause__):
+                    exc.transport_retries = retries
+                    raise
+                delay = (5, 15)[retries]
+                retries += 1
+                if transport_retry is not None:
+                    transport_retry({'attempt': retries + 1, 'transport_retries': retries,
+                                     'delay_seconds': delay,
+                                     'usage_unknown_for_failed_request': True})
+                time.sleep(delay)
+
+    def _request(self, prompt: str, max_tokens: int) -> Request:
         payload = json.dumps({
             "model": self.model, "temperature": 0, "max_tokens": max_tokens,
             "messages": [{"role": "system", "content": getattr(prompt, "system_prefix", SYSTEM_PREFIX)},
                          {"role": "user", "content": prompt}],
         }).encode()
-        request = Request(self.url, data=payload, headers={"Content-Type": "application/json"})
+        return Request(self.url, data=payload, headers={"Content-Type": "application/json"})
+
+    def _complete_once(self, request: Request, timeout: float) -> Completion:
         # Disable proxies: no remote access, even via a configured HTTP proxy.
         from urllib.request import build_opener, ProxyHandler
         class NoRedirect(HTTPRedirectHandler):
@@ -119,7 +160,9 @@ class LocalChatClient:
 def _single_http_request(conn, client: LocalChatClient, prompt: str, max_tokens: int, timeout: float) -> None:
     """Disposable child: a deadline can KILL a stuck HTTP request."""
     try:
-        conn.send(("ok", client.complete(prompt, max_tokens, timeout)))
+        conn.send(("ok", client.complete(
+            prompt, max_tokens, timeout,
+            transport_retry=lambda payload: conn.send(("transport_retry", payload)))))
     except Exception as exc:
         conn.send(("error", type(exc).__name__ + ": " + str(exc)))
     finally:
@@ -136,6 +179,7 @@ class ModelQueue:
         self.lockfile = lockfile
         self.lockfile.parent.mkdir(parents=True, exist_ok=True)
         self.healthy = True
+        self.transport_retry = None
         self.queue = None
         self.consumer: asyncio.Task | None = None
 
@@ -187,12 +231,17 @@ class ModelQueue:
                 process.start()
                 child.close()
                 try:
-                    if not parent.poll(max(0, deadline - time.monotonic())):
-                        raise ModelError("model_request_killed_on_deadline")
-                    status, result = parent.recv()
-                    if status == "error":
-                        raise ModelError(result)
-                    return result
+                    while True:
+                        if not parent.poll(max(0, deadline - time.monotonic())):
+                            raise ModelError("model_request_killed_on_deadline")
+                        status, result = parent.recv()
+                        if status == "transport_retry":
+                            if self.transport_retry is not None:
+                                self.transport_retry(result)
+                            continue
+                        if status == "error":
+                            raise ModelError(result)
+                        return result
                 finally:
                     if process.is_alive():
                         process.kill()
