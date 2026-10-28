@@ -4,7 +4,11 @@ Invocation: Run `python3 ledger.py INPUT.json OUTPUT.json` with exactly two path
 
 Input existence: A missing input file is an error; the program must not invent or fetch replacement input.
 
-Input shape: The input is a JSON array of transaction objects. Each transaction object has a `category` field (a string) and an `amount_cents` field (an integer). Invalid JSON, a non-array document, a non-object entry, a missing field, or a non-integer `amount_cents` is an error.
+Input document: The input is a JSON array of transaction objects.
+
+Input fields: Each transaction object has a `category` field (a string) and an `amount_cents` field (an integer).
+
+Input errors: Invalid JSON, a non-array document, a non-object entry, a missing field, or a non-integer `amount_cents` is an error.
 
 Aggregation totals: For each category, `totals` is the sum of `amount_cents` over that category's transactions.
 
