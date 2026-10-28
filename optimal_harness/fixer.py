@@ -4,6 +4,7 @@ import json
 from .coder import sanitize_plan
 from .policy import PolicyError, confined, normalized
 from .store import canonical
+from .prompt_budget import bounded, source_groups
 
 
 class FixerPrompt(str):
@@ -98,6 +99,13 @@ class DrivenFixer:
             state['hashes'] = hashes(state['items'])
             store.save_fixer_progress(task, state)
 
+        def budget(render, sources=None, evidence=None, target=None):
+            files, excerpts = source_groups(sources or {})
+            excerpts.update(evidence or {})
+            return bounded('fixer', render, files, excerpts, target=target,
+                           record=lambda shed: store.event('prompt_context_shed',
+                               dict(shed, task=task['id'], generation=task['generation'])))
+
         async def ask(prompt, limit):
             store.assert_lease(task)
             manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
@@ -127,10 +135,10 @@ class DrivenFixer:
         if state['items'] is None:
             reason = ''
             for _ in range(2):
-                text = await ask(FixerPrompt('QA/REVIEW FINDINGS:\n' + canonical(sources) +
+                text = await ask(budget(lambda f, e, a: FixerPrompt('QA/REVIEW FINDINGS:\n' + canonical({**f, **e}) +
                     '\nWRITABLE PATHS:\n' + canonical(sorted(allowed - protected)) +
                     '\nEnumerate requested fixes, one per line: path :: change. No JSON, no envelope.' +
-                    '\nVALIDATOR REASON: ' + reason), 512)
+                    '\nVALIDATOR REASON: ' + reason), sources=sources), 512)
                 try:
                     fixes = []
                     for line in text.splitlines():
@@ -163,10 +171,10 @@ class DrivenFixer:
             for _ in range(2):
                 full = confined(root, path)
                 current = full.read_bytes().decode('utf-8') if full.is_file() else ''
-                body = await ask(FixerPrompt('FINDING:\n' + change + '\nFILE: ' + path +
+                body = await ask(budget(lambda f, e, a: FixerPrompt('FINDING:\n' + e['finding'] + '\nFILE: ' + path +
                     '\nCURRENT CONTENT:\n' + current +
                     '\nReply with the complete corrected content of this file. No JSON, no envelope.' +
-                    ('\nVALIDATOR REASON: ' + reason if reason else '')), 4096)
+                    ('\nVALIDATOR REASON: ' + reason if reason else '')), evidence={'finding': change}, target=(path, current)), 4096)
                 try:
                     if not body.strip() or '\x00' in body or body.lstrip().startswith('```'):
                         raise PolicyError('file content must be nonempty text without NUL or envelope')

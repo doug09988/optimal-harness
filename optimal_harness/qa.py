@@ -3,6 +3,7 @@ import ast
 import textwrap
 from .policy import PolicyError
 from .store import canonical
+from .prompt_budget import bounded, source_groups
 
 
 class QAPrompt(str):
@@ -38,15 +39,26 @@ class DrivenQA:
             return 'plan'
         return next((name for name in self.plan if name not in self.bodies and name not in self.unwritable), 'report')
 
-    def prompt(self, sources):
+    def prompt(self, sources, record=None):
+        files, evidence = source_groups(sources)
+        prior = {}
+        if self.current == 'report':
+            evidence['execution'] = self.execution
+            prior['acceptance tests'] = self.assembly()
+            prior['unwritable tests'] = canonical(self.unwritable)
+        return bounded('qa', lambda f, e, a: self._prompt(
+            {**f, **{p: v for p, v in e.items() if p != 'execution'}}, e, a),
+            files, evidence, prior, record=record)
+
+    def _prompt(self, sources, evidence, prior):
         context = 'QA SPEC AND PERMITTED INPUTS:\n' + canonical(sources)
         if self.current == 'plan':
             contract = ('List acceptance test function names, one per line, plain text. '
                         'Use Python identifiers starting with test_. Maximum 40. No JSON or envelope.')
         elif self.current == 'report':
-            context += ('\nASSEMBLED ACCEPTANCE TESTS:\n' + self.assembly() +
-                        '\nEXECUTION RECORD (verbatim):\n' + self.execution +
-                        '\nUNWRITABLE TESTS:\n' + canonical(self.unwritable))
+            context += ('\nASSEMBLED ACCEPTANCE TESTS:\n' + prior['acceptance tests'] +
+                        '\nEXECUTION RECORD (verbatim):\n' + evidence['execution'] +
+                        '\nUNWRITABLE TESTS:\n' + prior['unwritable tests'])
             contract = ('Reply with findings as plain text. The FIRST line must be exactly PASS or FAIL, '
                         'your verdict on the artifact under test. No JSON or envelope.')
         else:

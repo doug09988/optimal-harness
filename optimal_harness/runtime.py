@@ -339,12 +339,15 @@ async def run_task(engine, task):
                 if qa is not None:
                     sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
                                if confined(root, path).is_file()}
-                    prompt = qa.prompt(sources)
+                    prompt = qa.prompt(sources, record=lambda shed: store.event('prompt_context_shed',
+                        dict(shed, task=task['id'], generation=task['generation'])))
                     manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
                 if coder is not None:
                     sources = {path: source_read(path) for path in sorted(inputs)
                                if confined(root, path).is_file()}
-                    prompt = coder.prompt(sources, conf['writes'], conf.get('deliverables', []))
+                    prompt = coder.prompt(sources, conf['writes'], conf.get('deliverables', []),
+                        record=lambda shed: store.event('prompt_context_shed',
+                            dict(shed, task=task['id'], generation=task['generation'])))
                     manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
                 if raw_writer:
                     prompt = RawWritePrompt(prompt)

@@ -2,6 +2,7 @@
 import json
 from .policy import PolicyError, normalized
 from .store import canonical
+from .prompt_budget import bounded, source_groups
 
 
 def sanitize_plan(entries, allowed, dropped=None):
@@ -64,13 +65,29 @@ class DrivenCoder:
     def completion_cap(self):
         return 512 if self.current == 'plan' else 4096
 
-    def prompt(self, sources, allowed=(), required=()):
+    def prompt(self, sources, allowed=(), required=(), record=None):
+        files, evidence = source_groups(sources)
+        current = self.current
+        path = self.repair_path if current == 'repair_body' else current.removeprefix('file:')
+        target = (path, sources.get(path, self.bodies.get(path, ''))) if current.startswith('file:') or current == 'repair_body' else None
+        prior = {p: b for p, b in self.bodies.items() if len(b.encode()) <= 1024}
+        prior.update({'planned file ' + p: purpose for p, purpose in (self.plan or {}).items()
+                      if target is None or p != target[0]})
+        if self.execution:
+            evidence['self-check'] = canonical(self.execution)[-4000:]
+        return bounded('coder', lambda f, e, a: self._prompt(
+            {**f, **{p: v for p, v in e.items() if p != 'self-check'}}, allowed, required,
+            {p: a[p] for p in self.bodies if p in a}, e.get('self-check'),
+            {p: a.get('planned file ' + p, purpose) for p, purpose in self.plan.items()}
+            if self.plan is not None else None), files, evidence, prior, target, record)
+
+    def _prompt(self, sources, allowed, required, accepted, execution, planned=None):
         context = 'CODER SPEC AND INTAKE INPUTS:\n' + canonical(sources)
         context += '\nDECLARED WRITABLE PATHS:\n' + canonical(allowed)
         context += '\nREQUIRED FILES:\n' + canonical(required)
-        context += '\nPLANNED FILES:\n' + canonical(self.plan)
+        context += '\nPLANNED FILES:\n' + canonical(self.plan if planned is None else planned)
         context += '\nACCEPTED FILE PATHS:\n' + canonical(list(self.bodies))
-        context += '\nSMALL ACCEPTED FILES:\n' + canonical({p: b for p, b in self.bodies.items() if len(b.encode()) <= 1024})
+        context += '\nSMALL ACCEPTED FILES:\n' + canonical(accepted)
         current = self.current
         if current == 'plan':
             contract = ('List files to produce, one per line: path :: purpose. Maximum 24 files. '
@@ -83,8 +100,8 @@ class DrivenCoder:
         else:
             path = self.repair_path if current == 'repair_body' else current.removeprefix('file:')
             contract = 'FILE: ' + path + "\nReply with only this file's complete content."
-        if self.execution:
-            context += '\nSELF-CHECK ERROR TAIL:\n' + canonical(self.execution)[-4000:]
+        if execution is not None:
+            context += '\nSELF-CHECK ERROR TAIL:\n' + execution
         return CoderPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 
     def accept_plan(self, text, allowed, required=(), dropped=None):

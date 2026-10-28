@@ -165,3 +165,18 @@ class FixerTests(unittest.TestCase):
         task = self.attempt(['{"action":"finish"}', corrected, '# unit'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual(len(self.calls), 3)
+
+    def test_oversized_target_fails_without_model_call(self):
+        self.setup_task()
+        (self.root/'wordfreq.py').write_text('☃' * 22000)
+        task = self.attempt([])
+        self.assertIn('target_too_large_for_single_call', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertEqual(self.calls, [])
+
+    def test_under_budget_prompt_unchanged(self):
+        self.setup_task()
+        self.attempt(['# fixed', '# unit'])
+        self.assertEqual(self.calls[0][0],
+            'FINDING:\nfix counts\nFILE: wordfreq.py\nCURRENT CONTENT:\nold implementation\n'
+            '\nReply with the complete corrected content of this file. No JSON, no envelope.')
