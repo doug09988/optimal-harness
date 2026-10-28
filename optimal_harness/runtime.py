@@ -175,14 +175,62 @@ async def run_task(engine, task):
             offset += len(text.encode('utf-8'))
         return ''.join(chunks)
 
+    async def execute_command(name):
+        command = conf['commands'][name]
+        # Non-isolated commands are synchronous under lease fence: reclaimed
+        # workers cannot commit staged outputs after another worker claims.
+        def command_effect(c):
+            output = sandbox_command(root, command, min(ledger.budget['max_command_seconds'],
+                                     ledger.budget['max_seconds']-ledger.seconds))
+            capture = command['capture']
+            payload = (canonical(output)+'\n').encode()
+            owned_capture = f"vault/runs/{task['id']}/a{task['generation']}/commands/{name}.json"
+            atomic_write(confined(root, owned_capture), payload)
+            engine._checkpoint(root, task, owned_capture, checkpoints, 'command', c)
+            atomic_write(confined(root, capture), payload)
+            engine._checkpoint(root, task, capture, checkpoints, 'command_alias', c)
+            for path in command.get('writes', []):
+                if confined(root, path).is_file():
+                    engine._checkpoint(root, task, path, checkpoints, 'command_write', c)
+            return {'capture': owned_capture, 'declared_capture': capture, 'exit_code': output['exit_code'], 'reason': output['reason'],
+                    'containment': output.get('containment', 'test-double')}
+        return await asyncio.to_thread(store.commit, task, command_effect)
+
     try:
         if not engine._pins_intact(plan, root):
             raise PolicyError('pinned input or charter changed')
         broker, evidence, handoff, brief = engine._prepare(root, task)
         manifest['evidence'], manifest['handoff'] = evidence, handoff
         trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
+        if qa is not None:
+            # Hash input bytes without exposing command-only artifacts to the model.
+            inputs = (set(task['brief']['permitted_reads']) | set(conf.get('command_only', [])) |
+                      set(plan.get('implementation_paths', [])) | set(plan.get('immutable_inputs', [])) |
+                      {plan['spec']})
+            for command in conf.get('commands', {}).values():
+                inputs.update(command.get('reads', []))
+            inputs.difference_update(conf.get('deliverables', []))
+            input_hash = hashlib.sha256(canonical({
+                path: hashlib.sha256(confined(root, path).read_bytes()).hexdigest()
+                if confined(root, path).is_file() else None for path in sorted(inputs)
+            }).encode()).hexdigest()
+            qa.restore(store.load_qa_progress(task, input_hash))
         while True:
             store.assert_lease(task)
+            if qa is not None and qa.current == 'report' and qa.execution is None:
+                target = next(p for p in conf['deliverables'] if p.endswith('test_acceptance.py'))
+                write_checkpoint(target, qa.assembly())
+                last = canonical({'written': target, 'sha256': checkpoints[target],
+                                  'planned_tests': qa.plan, 'unwritable': qa.unwritable})
+                store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                            'op': 'write', 'path_or_name': target, 'receipt': last})
+                name = next(name for name, cmd in conf['commands'].items() if target in cmd.get('reads', []))
+                receipt = await execute_command(name)
+                qa.execution = confined(root, receipt['capture']).read_text()
+                last = canonical(receipt) + '\n' + qa.execution
+                last_observation = last
+                store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                            'op': 'command', 'path_or_name': name, 'receipt': last})
             progress = canonical({'checkpointed': sorted(set(checkpoints) - partial),
                                   'missing_deliverables': [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial],
                                   'partial_files_continue_appending': sorted(partial), 'handoff_path': handoff, 'evidence_path': evidence})
@@ -247,6 +295,8 @@ async def run_task(engine, task):
             cap, timeout = ledger.reserve(prompt, getattr(prompt, "system_prefix", SYSTEM_PREFIX))
             if review is not None:
                 cap = min(cap, review.completion_cap)
+            if qa is not None:
+                cap = min(cap, qa.completion_cap)
             store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
                         'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
                         'completion_cap': cap})
@@ -275,17 +325,9 @@ async def run_task(engine, task):
                     store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
                     qa.reject(last)
                     action = None
+                store.save_qa_progress(task, input_hash, qa.progress())
                 if action is None:
-                    if qa.current != 'report' or qa.execution is not None:
-                        continue
-                    target = next(p for p in conf['deliverables'] if p.endswith('test_acceptance.py'))
-                    write_checkpoint(target, qa.assembly())
-                    last = canonical({'written': target, 'sha256': checkpoints[target],
-                                      'planned_tests': qa.plan, 'unwritable': qa.unwritable})
-                    store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
-                                'op': 'write', 'path_or_name': target, 'receipt': last})
-                    name = next(name for name, cmd in conf['commands'].items() if target in cmd.get('reads', []))
-                    action = {'action': 'command', 'name': name}
+                    continue
             elif review is not None:
                 section = review.current
                 try:
@@ -484,25 +526,7 @@ async def run_task(engine, task):
                 elif op == 'command':
                     if action['name'] not in conf.get('commands', {}):
                         raise PolicyError('command not allowed')
-                    command = conf['commands'][action['name']]
-                    # Non-isolated commands are synchronous under lease fence: reclaimed
-                    # workers cannot commit staged outputs after another worker claims.
-                    def command_effect(c):
-                        output = sandbox_command(root, command, min(ledger.budget['max_command_seconds'],
-                                                 ledger.budget['max_seconds']-ledger.seconds))
-                        capture = command['capture']
-                        payload = (canonical(output)+'\n').encode()
-                        owned_capture = f"vault/runs/{task['id']}/a{task['generation']}/commands/{action['name']}.json"
-                        atomic_write(confined(root, owned_capture), payload)
-                        engine._checkpoint(root, task, owned_capture, checkpoints, 'command', c)
-                        atomic_write(confined(root, capture), payload)
-                        engine._checkpoint(root, task, capture, checkpoints, 'command_alias', c)
-                        for path in command.get('writes', []):
-                            if confined(root, path).is_file():
-                                engine._checkpoint(root, task, path, checkpoints, 'command_write', c)
-                        return {'capture': owned_capture, 'declared_capture': capture, 'exit_code': output['exit_code'], 'reason': output['reason'],
-                                'containment': output.get('containment', 'test-double')}
-                    receipt = await asyncio.to_thread(store.commit, task, command_effect)
+                    receipt = await execute_command(action['name'])
                     last = canonical(receipt) + '\nFull output is at capture pointer. Read it if needed.'
                     if qa is not None:
                         qa.execution = confined(root, receipt['capture']).read_text()

@@ -146,6 +146,76 @@ class RuntimeTests(unittest.TestCase):
         task = self.run_qa(['test_one', 'def test_other():\n    pass', corrected, 'PASS'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
 
+    def qa_attempts(self, first, second, change_input=False):
+        from optimal_harness.engine import make_brief
+        from unittest.mock import patch
+        self.submit()
+        self.store.finish(self.store.claim('setup', 60), 'SUCCEEDED')
+        self.store.enqueue('wordcounter', 'QA', 0,
+                           make_brief('QA', self.store.project('wordcounter')['plan']))
+        calls = []
+        class Queue(FakeQueue):
+            async def request(q, prompt, cap, timeout):
+                calls.append((str(prompt), cap))
+                item = q.actions.popleft()
+                if isinstance(item, Exception):
+                    raise item
+                return Completion(item, 100, 80, 30)
+        output = {'exit_code': 0, 'reason': 'exited', 'seconds': 0.01,
+                  'stdout': 'acceptance passed', 'stderr': ''}
+        with patch('optimal_harness.runtime.sandbox_command', return_value=output) as execute, patch.object(self.engine, '_advance'):
+            self.engine.queue = Queue(first)
+            asyncio.run(self.engine.run_task(self.store.claim('first', 60)))
+            self.assertEqual(self.store.tasks('wordcounter')[-1]['status'], 'QUEUED')
+            if change_input:
+                (self.root/'wordfreq.py').write_text('# changed artifact under test\n')
+            # Reopen the store to verify progress survives runtime reconstruction.
+            self.engine.store = Store(self.base/'board.db')
+            self.engine.queue = Queue(second)
+            asyncio.run(self.engine.run_task(self.store.claim('second', 60)))
+            self.assertEqual(self.store.tasks('wordcounter')[-1]['status'], 'SUCCEEDED')
+        return calls, execute.call_count
+
+    def test_driven_qa_caps_and_resume_after_two_of_four_tests(self):
+        names = ['test_' + str(n) for n in range(4)]
+        bodies = ['def ' + name + '():\n    assert True' for name in names]
+        calls, executions = self.qa_attempts(
+            ['\n'.join(names), *bodies[:2], RuntimeError('model_request_killed_on_deadline')],
+            [*bodies[2:], 'PASS'])
+        self.assertEqual([cap for _, cap in calls], [512, 2048, 2048, 2048, 2048, 2048, 1024])
+        self.assertIn('TEST: test_2', calls[4][0])
+        self.assertIn('TEST: test_3', calls[5][0])
+        code = (self.root/'test_acceptance.py').read_text()
+        for name in names:
+            self.assertIn('def ' + name, code)
+        self.assertEqual(executions, 1)
+
+    def test_driven_qa_changed_artifact_discards_progress(self):
+        body = 'def test_one():\n    assert True'
+        calls, executions = self.qa_attempts(
+            ['test_one\ntest_two', body, RuntimeError('model_request_killed_on_deadline')],
+            ['test_fresh', 'def test_fresh():\n    assert True', 'PASS'], change_input=True)
+        self.assertEqual([cap for _, cap in calls], [512, 2048, 2048, 512, 2048, 1024])
+        self.assertNotIn('def test_one', (self.root/'test_acceptance.py').read_text())
+        self.assertEqual(executions, 1)
+
+    def test_driven_qa_resume_preserves_unwritable_tests(self):
+        calls, executions = self.qa_attempts(
+            ['test_bad\ntest_good', '', '', RuntimeError('model_request_killed_on_deadline')],
+            ['def test_good():\n    assert True', 'PASS'])
+        self.assertIn('TEST: test_good', calls[4][0])
+        self.assertIn('test_bad', calls[-1][0])
+        self.assertNotIn('def test_bad', (self.root/'test_acceptance.py').read_text())
+        self.assertEqual(executions, 1)
+
+    def test_driven_qa_resume_with_complete_tests_executes_before_report(self):
+        calls, executions = self.qa_attempts(
+            ['test_one', 'def test_one():\n    assert True', RuntimeError('model_request_killed_on_deadline')],
+            ['PASS'])
+        self.assertEqual([cap for _, cap in calls], [512, 2048, 1024, 1024])
+        self.assertIn('acceptance passed', calls[-1][0])
+        self.assertEqual(executions, 2)
+
     def test_generated_handoff_shape_and_event_order(self):
         task = self.run_coder([
             {'action': 'write', 'path': 'wordfreq.py', 'data': '# code'},

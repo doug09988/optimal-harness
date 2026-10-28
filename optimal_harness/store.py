@@ -54,6 +54,10 @@ class Store:
                     path TEXT NOT NULL, sha256 TEXT NOT NULL, archive TEXT NOT NULL,
                     PRIMARY KEY(task,generation,path)
                 );
+                CREATE TABLE IF NOT EXISTS qa_progress (
+                    project TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL,
+                    body TEXT NOT NULL, PRIMARY KEY(project,stage)
+                );
                 CREATE TABLE IF NOT EXISTS handoffs (
                     task TEXT NOT NULL, generation INTEGER NOT NULL, body TEXT NOT NULL,
                     PRIMARY KEY(task,generation)
@@ -210,6 +214,23 @@ class Store:
                   (task['id'], task['generation'], task['project_id'], path, sha256, archive))
         self._event(c, 'artifact_checkpoint', {'task': task['id'], 'generation': task['generation'],
                     'project': task['project_id'], 'path': path, 'sha256': sha256, 'archive': archive})
+
+    def load_qa_progress(self, task, input_hash):
+        with self.transaction() as c:
+            self._assert(c, task)
+            row = c.execute('SELECT * FROM qa_progress WHERE project=? AND stage=?',
+                            (task['project_id'], task['stage'])).fetchone()
+            if row and row['input_hash'] == input_hash:
+                return json.loads(row['body'])
+            c.execute('DELETE FROM qa_progress WHERE project=? AND stage=?',
+                      (task['project_id'], task['stage']))
+            return None
+
+    def save_qa_progress(self, task, input_hash, body):
+        def effect(c):
+            c.execute('INSERT OR REPLACE INTO qa_progress VALUES(?,?,?,?)',
+                      (task['project_id'], task['stage'], input_hash, canonical(body)))
+        self.commit(task, effect)
 
     def checkpoints(self, project):
         with self.transaction() as c:

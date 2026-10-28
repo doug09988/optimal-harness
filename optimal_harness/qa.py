@@ -21,6 +21,18 @@ class DrivenQA:
         self.execution = None
 
     @property
+    def completion_cap(self):
+        return 512 if self.current == 'plan' else 1024 if self.current == 'report' else 2048
+
+    def progress(self):
+        return {key: getattr(self, key) for key in ('plan', 'bodies', 'unwritable', 'errors', 'feedback')}
+
+    def restore(self, state):
+        if state is not None:
+            for key in ('plan', 'bodies', 'unwritable', 'errors', 'feedback'):
+                setattr(self, key, state[key])
+
+    @property
     def current(self):
         if self.plan is None:
             return 'plan'
@@ -98,5 +110,6 @@ class DrivenQA:
         header = ('# Runtime-assembled acceptance tests, derived from SPEC alone.\n'
                   'import unittest\nimport subprocess\nimport sys\nimport os\nimport json\n'
                   'import pathlib\nimport tempfile\n\nclass AcceptanceTests(unittest.TestCase):\n')
-        bodies = '\n\n'.join(textwrap.indent(code, '    ') for code in self.bodies.values())
+        bodies = '\n\n'.join(textwrap.indent(self.bodies[name], '    ')
+                              for name in (self.plan or []) if name in self.bodies)
         return header + (bodies or '    pass') + '\n'
