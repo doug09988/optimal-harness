@@ -6,13 +6,19 @@ Input existence: A missing input file is an error; the program must not invent o
 
 Input shape: The input is a JSON array of transaction objects. Each transaction object has a `category` field (a string) and an `amount_cents` field (an integer). Invalid JSON, a non-array document, a non-object entry, a missing field, or a non-integer `amount_cents` is an error.
 
-Aggregation: For each category, `totals` is the sum of `amount_cents` over that category's transactions and `counts` is the number of that category's transactions.
+Aggregation totals: For each category, `totals` is the sum of `amount_cents` over that category's transactions.
+
+Aggregation counts: For each category, `counts` is the number of that category's transactions.
 
 Refunds: Negative `amount_cents` values are refunds; include them in the sums exactly like positive values.
 
 Empty category: A transaction whose `category` is the empty string is counted under the category name `uncategorized`.
 
-Output shape: Write UTF-8 JSON containing one object with exactly the keys `totals`, `counts`, `grand_total_cents`, and `transaction_count`. `grand_total_cents` is the sum of `amount_cents` over all transactions and `transaction_count` is the number of transactions. Category keys inside `totals` and `counts` appear in ascending Unicode code-point order.
+Output keys: Write UTF-8 JSON containing one object with exactly the keys `totals`, `counts`, `grand_total_cents`, and `transaction_count`.
+
+Output totals: `grand_total_cents` is the sum of `amount_cents` over all transactions and `transaction_count` is the number of transactions.
+
+Output order: Category keys inside `totals` and `counts` appear in ascending Unicode code-point order.
 
 Empty input: The empty input array `[]` is valid and produces `totals` `{}`, `counts` `{}`, `grand_total_cents` 0, and `transaction_count` 0.
 
