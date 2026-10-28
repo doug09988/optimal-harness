@@ -9,6 +9,7 @@ import sys
 from optimal_harness.engine import Engine
 from optimal_harness.model import LocalChatClient, ModelQueue
 from optimal_harness.store import Store
+from optimal_harness.lifecycle import runner_signals
 
 
 def main():
@@ -33,7 +34,8 @@ def main():
     queue = ModelQueue(client, base / 'runs' / 'model.lock')
     engine = Engine(store, queue, lease_seconds=1800)
     project = engine.submit(target / 'work', plan, target / 'grader' / 'acceptance.json')
-    asyncio.run(engine.serve(jobs=1))
+    with runner_signals(store, [project]):
+        asyncio.run(engine.serve(jobs=1))
     result = {'project': store.projects(), 'tasks': store.tasks(project), 'audit': store.audit(),
               'integrity_errors': engine.integrity_errors(project, target / 'work')}
     (target / 'result.json').write_text(json.dumps(result, indent=2)+'\n')

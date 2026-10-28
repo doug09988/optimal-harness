@@ -61,7 +61,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("one trusted worker job is supported")
             engine.queue = ModelQueue(LocalChatClient(args.endpoint, args.model),
                                       Path(args.db).resolve().parent / "model.lock")
-            asyncio.run(engine.serve(jobs=args.jobs, until_idle=not args.forever))
+            from .lifecycle import runner_signals
+            with runner_signals(store, [p['id'] for p in store.projects()]):
+                asyncio.run(engine.serve(jobs=args.jobs, until_idle=not args.forever))
             print(json.dumps(store.projects(), indent=2))
         elif args.command == "serve":
             from .api import BoardAPI

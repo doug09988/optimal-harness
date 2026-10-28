@@ -92,6 +92,9 @@ class Engine:
         plan['obligations'] = extract(confined(root, plan['spec']).read_text())
         atomic_write(confined(root, 'vault/obligations.json'), (canonical(plan['obligations']) + '\n').encode())
         self.store.add_project(project, root, plan, make_brief("INTAKE", plan))
+        from .lifecycle import sweep
+        if self.store.db.name == "board.sqlite3":
+            sweep(self.store.db.parent.parent, successor=self.store)
         return project
 
     async def _heartbeat(self, task: dict) -> None:
