@@ -372,13 +372,18 @@ class Engine:
             notes = (f"REGRESSION: best failure count: {best['failure_count']}; "
                      f"regressed failure count: {count}. Best artifact restored.\n"
                      + "\n".join(best['failures']))
+        repeated = self.store.project(project).get("defect") == fingerprint
         cycle, repeats = self.store.failure_cycle(project, fingerprint)
         if repeats >= 3:
             if not regression:
                 self._restore_artifact(project, root, best)
             self.store.project_status(project, "ESCALATED", "three failed cycles on same defect: " + notes)
         else:
-            self.store.enqueue(project, "FIXER", cycle, make_brief("FIXER", plan, notes, "QA"))
+            brief = make_brief("FIXER", plan, notes, "QA")
+            if repeated or regression:
+                from .test_source import attach
+                attach(brief, plan, root, best["failures"] if regression else failures)
+            self.store.enqueue(project, "FIXER", cycle, brief)
 
     def coordinator_verdict(self, project: str, approved: bool, notes: str) -> None:
         p = self.store.project(project)

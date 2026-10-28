@@ -102,6 +102,13 @@ class DrivenFixer:
         def budget(render, sources=None, evidence=None, target=None):
             files, excerpts = source_groups(sources or {})
             excerpts.update(evidence or {})
+            if 'failing_tests' in task['brief']:
+                from .test_source import shed, section
+                original_render = render
+                def render(f, e, a):
+                    prompt, _ = shed(task['brief']['failing_tests'],
+                        lambda tests: FixerPrompt(str(original_render(f, e, a)) + '\n' + section(tests)))
+                    return prompt
             return bounded('fixer', render, files, excerpts, target=target,
                            record=lambda shed: store.event('prompt_context_shed',
                                dict(shed, task=task['id'], generation=task['generation'])))
