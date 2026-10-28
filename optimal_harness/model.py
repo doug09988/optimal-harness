@@ -243,6 +243,10 @@ def parse_action(text: str) -> dict:
         "append": {"action", "path", "data"}, "command": {"action", "name"},
         "finish": {"action", "summary"}, "fail": {"action", "reason"},
     }[action["action"]]
+    if action["action"] in ("write", "append") and "more" in action:
+        if type(action["more"]) is not bool:
+            raise ModelError("more must be boolean")
+        legal = legal | {"more"}
     if action["action"] == "read":
         if not set(action) <= legal | {"offset", "length"}:
             raise ModelError("invalid read schema")
@@ -252,7 +256,7 @@ def parse_action(text: str) -> dict:
         legal = set(action)
     if not {"action", "path"} <= set(action) and action["action"] == "read":
         raise ModelError("missing read path")
-    typed = legal - {"action", "offset", "length"}
+    typed = legal - {"action", "offset", "length", "more"}
     if action["action"] == "write" and isinstance(action.get("data"), (dict, list)):
         typed -= {"data"}
     if set(action) != legal or any(not isinstance(action[k], str) for k in typed):

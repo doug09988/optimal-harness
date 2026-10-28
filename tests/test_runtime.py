@@ -39,6 +39,86 @@ class RuntimeTests(unittest.TestCase):
             count=c.execute("SELECT count(*) FROM events WHERE kind='additional_actions_discarded'").fetchone()[0]
         self.assertEqual(count,1)
 
+    def run_coder(self, actions):
+        from optimal_harness.engine import make_brief
+        from unittest.mock import patch
+        self.submit()
+        task = self.store.claim('worker', 60)
+        task['stage'] = 'CODER'
+        task['brief'] = make_brief('CODER', self.store.project('wordcounter')['plan'])
+        class Queue(FakeQueue):
+            async def request(q, prompt, *args):
+                q.calls += 1
+                value = q.actions.popleft()
+                if callable(value):
+                    value = value(prompt)
+                return Completion(value if isinstance(value, str) else json.dumps(value), 100, 80, 30)
+        self.engine.queue = Queue(actions)
+        with patch.object(self.engine, '_advance'):
+            asyncio.run(self.engine.run_task(task))
+        return self.store.tasks('wordcounter')[0]
+
+    def test_coder_chunks_recover_from_truncation_and_oversize(self):
+        import re
+        def after_bad(prompt):
+            self.assertIn('Use a smaller chunk', prompt)
+            self.assertIn('Rejected actions wrote no bytes', prompt)
+            return {'action': 'write', 'path': 'wordfreq.py', 'data': 'α\n', 'more': True}
+        def continuation(prompt):
+            self.assertIn('Continue wordfreq.py using action=append', prompt)
+            self.assertIn('"role_work_complete": false', prompt)
+            return {'action': 'append', 'path': 'wordfreq.py', 'data': 'β\n', 'more': False}
+        def handoff(prompt):
+            path = re.search(r'vault/runs/[0-9a-f]{16}/a[0-9]+/handoff.json', prompt).group()
+            return {'action': 'write', 'path': path, 'data': {'status': 'ready', 'open_discrepancies': []}}
+        task = self.run_coder([
+            '{"action":"write","path":"wordfreq.py","data":"truncated',
+            {'action': 'write', 'path': 'wordfreq.py', 'data': 'x' * 5000},
+            after_bad, continuation,
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests\n'},
+            handoff, {'action': 'finish', 'summary': 'done'}])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual((self.root/'wordfreq.py').read_text(), 'α\nβ\n')
+        self.assertEqual(self.engine.queue.calls, 7)
+
+    def test_coder_invalid_size_retries_are_bounded_without_writes(self):
+        task = self.run_coder([{'action': 'write', 'path': 'wordfreq.py', 'data': 'x'*5000}] * 3)
+        self.assertIn('coder_action_format_exhausted', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 3)
+        self.assertFalse((self.root/'wordfreq.py').exists())
+
+    def test_chunk_marker_requires_boolean_and_append_text(self):
+        from optimal_harness.model import parse_action, ModelError
+        for value in (0, 1, 'true', None):
+            with self.assertRaises(ModelError):
+                parse_action(json.dumps({'action': 'write', 'path': 'x', 'data': 'x', 'more': value}))
+        with self.assertRaises(ModelError):
+            parse_action(json.dumps({'action': 'append', 'path': 'x', 'data': {}, 'more': False}))
+
+    def test_coder_truncated_retries_are_bounded(self):
+        task = self.run_coder(['{"action":"write","data":"unfinished'] * 3)
+        self.assertIn('coder_action_format_exhausted', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 3)
+        self.assertFalse((self.root/'wordfreq.py').exists())
+
+    def test_coder_partial_file_cannot_finish(self):
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': 'partial', 'more': True},
+            {'action': 'finish', 'summary': 'premature'}])
+        self.assertIn('incomplete_chunked_files:wordfreq.py', task['failure'])
+
+    def test_append_preserves_write_scope_and_file_limit(self):
+        broker = FileBroker(self.root, [], ['allowed'], max_bytes=5)
+        broker.write('allowed', 'é')
+        broker.write('allowed', '☃', append=True)
+        self.assertEqual((self.root/'allowed').read_text(), 'é☃')
+        with self.assertRaises(PolicyError):
+            broker.write('allowed', 'x', append=True)
+        for path in ('spec.md', '../escape'):
+            with self.assertRaises(PolicyError):
+                broker.write(path, 'x', append=True)
+        self.assertEqual((self.root/'allowed').read_text(), 'é☃')
+
     def test_utf8_pages_never_replace_or_skip_characters(self):
         text='A☃BéC'; (self.root/'unicode').write_text(text)
         b=FileBroker(self.root,['unicode'],[])

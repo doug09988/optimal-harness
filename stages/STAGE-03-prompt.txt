@@ -1,0 +1,34 @@
+# STAGE-03 — FIXER: CODER-stage write actions truncate and invalidate
+
+Role: FIXER. The coordinator (Doofy) verifies independently. You are
+on git branch codex/stage-03-coder-actions in ~/optimal-harness.
+Commit your work to this branch.
+
+DEFECT (coordinator-verified): run runs/wordcounter-verify-01 —
+INTAKE and REVIEW pass (stage 2 closed the intake class); CODER
+fails error:no_progress:invalid_actions and the project escalates.
+Board evidence (runs/wordcounter-verify-01/board.sqlite3, events
+seq 46-64): the worker's write actions embed the ENTIRE target
+file in one JSON "data" field; one call hit the 8192
+completion-token cap mid-string, yielding truncated, unparseable
+JSON; repeated attempts were likewise invalid. Three raw actions
+are recorded in the events if you need the exact shapes.
+
+TASK: Make CODER-stage file writes succeed within budget. Sound
+directions (choose the smallest combination that works): teach a
+chunked write/append discipline in the coder charter with exact
+action skeletons and an explicit per-action size rule; add an
+append operation to the runtime if none exists (with tests,
+write-scoping intact); return deterministic feedback on truncated
+or oversized actions that names the size problem and demands a
+smaller chunk, with bounded retries like the intake pattern.
+NON-NEGOTIABLE: verifier/gate strictness unchanged; write-scoping
+unchanged; examples/word-counter/grader and the plan spec are
+immutable.
+
+EXECUTION: your sandbox cannot reach the model endpoint
+(loopback) — do not attempt the live run; the coordinator executes
+it. Deliverables: code + tests, stages/STAGE-03-result.md (what
+changed, which failure shapes it addresses, exact sandbox test
+outcomes), and a git commit of all of it on this branch. Never
+modify ~/harness or ~/vault. Standard library only.

@@ -52,6 +52,13 @@ async def run_task(engine, task):
     previous = None
     seen_actions = {}
     intake_format_errors = 0
+    partial = set()
+    coder_size_errors = 0
+    chunk_limit = min(4096, max(1, int(ledger.budget['max_completion_tokens']) - 512))
+    chunk_feedback = (f'CODER action size: action may be truncated or oversized. Use a smaller chunk; '
+                      f'ONE complete JSON action at most {chunk_limit} UTF-8 bytes including escaping. '
+                      'First write with more=true, then append with more=true; final append more=false. '
+                      'Rejected actions wrote no bytes; retry only the rejected chunk.')
     manifest = {'task': task['id'], 'generation': task['generation'], 'role': task['stage'],
                 'budget': ledger.budget, 'static_prefix_sha256': hashlib.sha256(SYSTEM_PREFIX.encode()).hexdigest(),
                 'charter_sha256': plan['charter_hashes'][f"vault/charters/{task['stage'].lower()}.md"],
@@ -86,14 +93,14 @@ async def run_task(engine, task):
         trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
         while True:
             store.assert_lease(task)
-            progress = canonical({'checkpointed': sorted(checkpoints),
-                                  'missing_deliverables': [p for p in conf.get('deliverables', []) if p not in checkpoints],
-                                  'handoff_path': handoff, 'evidence_path': evidence})
-            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints]
+            progress = canonical({'checkpointed': sorted(set(checkpoints) - partial),
+                                  'missing_deliverables': [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial],
+                                  'partial_files_continue_appending': sorted(partial), 'handoff_path': handoff, 'evidence_path': evidence})
+            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
             context_task = dict(task)
             context_task['brief'] = dict(task['brief']) | {
                 'deliverables': missing,
-                'already_checkpointed_do_not_repeat': sorted(checkpoints),
+                'already_checkpointed_do_not_repeat': sorted(set(checkpoints) - partial),
                 'role_work_complete': not missing,
                 'current_goal': ('Produce remaining deliverables only' if missing else
                                  'The role work is ALREADY COMPLETE. Only write the ready handoff and finish.'),
@@ -105,12 +112,14 @@ async def run_task(engine, task):
                        'Once all deliverables are checkpointed, write the handoff JSON with '
                        'status=ready, open_discrepancies=[], summary=<factual summary>, then finish. '
                        'Respond with ONE next JSON action only.')
-            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints]
+            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
             commands = {cmd['capture']: name for name, cmd in conf.get('commands', {}).items()}
             if missing:
                 target = missing[0]
                 next_step = ('Run named command ' + commands[target] if target in commands else
-                             'Create ' + target + ' using action=write, path=' + target + ', data=<complete file text>')
+                             ('Continue ' + target + ' using action=append; final chunk more=false' if target in partial else
+                              'Create ' + target + ' using action=write, path=' + target +
+                              (', data=<file text or first chunk>, more=<true if chunks remain>' if task['stage'] == 'CODER' else ', data=<complete file text>')))
             elif handoff not in checkpoints:
                 next_step = 'Write ready handoff at ' + handoff
             else:
@@ -121,6 +130,8 @@ async def run_task(engine, task):
             prompt += '\nCompleted model calls in this attempt: ' + str(ledger.calls)
             if last.startswith('{') and '"content":' in last:
                 prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
+            if task['stage'] == 'CODER':
+                prompt += '\nCHUNK RULE: ' + chunk_feedback
             cap, timeout = ledger.reserve(prompt, SYSTEM_PREFIX)
             store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
                         'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
@@ -149,11 +160,18 @@ async def run_task(engine, task):
                 if result.text.lstrip()[end:].strip():
                     store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
                                 'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
+                if task['stage'] == 'CODER' and len(first.encode('utf-8')) > chunk_limit:
+                    raise ModelError('encoded action exceeds chunk limit')
                 action = parse_action(first)
             except (ModelError, ValueError) as exc:
                 # A bounded correction is fresh, not replay of malformed history.
                 last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
                         + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
+                if task['stage'] == 'CODER':
+                    coder_size_errors += 1
+                    last = chunk_feedback + '\n' + last
+                    if coder_size_errors >= 3:
+                        raise RuntimeError('coder_action_format_exhausted:three invalid or oversized actions; use smaller chunks')
                 repeat += 1
                 if repeat >= 3:
                     raise RuntimeError('error:no_progress:invalid_actions')
@@ -168,6 +186,8 @@ async def run_task(engine, task):
             if op == 'fail':
                 raise RuntimeError('honest_worker_failure:' + action['reason'])
             if op == 'finish':
+                if partial:
+                    raise RuntimeError('incomplete_chunked_files:' + ','.join(sorted(partial)))
                 engine._check_stage(root, task, conf, checkpoints, handoff)
                 manifest.update(status='succeeded', usage=ledger.totals())
                 trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
@@ -192,6 +212,8 @@ async def run_task(engine, task):
                         raise PolicyError('encoded read page exceeds observation budget; reduce length')
                 elif op in ('write', 'append'):
                     data = action["data"]
+                    if 'more' in action and task['stage'] != 'CODER':
+                        raise PolicyError('chunk marker more is only supported for CODER')
                     if task['stage'] == 'INTAKE' and action['path'] in conf.get('deliverables', []):
                         try:
                             if op != 'write':
@@ -213,7 +235,11 @@ async def run_task(engine, task):
                     if isinstance(data, (dict, list)):
                         data = canonical(data) + "\n"
                     count = write_checkpoint(action['path'], data, op == 'append')
-                    last = canonical({'written': action['path'], 'bytes': count, 'sha256': checkpoints[action['path']]})
+                    if action.get('more', False):
+                        partial.add(action['path'])
+                    else:
+                        partial.discard(action['path'])
+                    last = canonical({'more': action.get('more', False), 'written': action['path'], 'bytes': count, 'sha256': checkpoints[action['path']]})
                 elif op == 'command':
                     if action['name'] not in conf.get('commands', {}):
                         raise PolicyError('command not allowed')
