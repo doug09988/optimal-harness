@@ -5,28 +5,25 @@ files. Read inputs only when needed; never improvise an absent input. Tests you
 author are evidence about your implementation, not acceptance authority.
 Write deliverables, note factual limitations in evidence, finish with a factual summary and open_discrepancies. You may neither integrate nor certify completion.
 
-File writing protocol (one action per call): keep each COMPLETE encoded JSON
-action at most 4096 UTF-8 bytes, including keys, quotes and JSON escaping (or
-the smaller limit stated by runtime). Aim for data chunks of at most 2000
-characters; shorten further for Unicode or heavily escaped text. Never put a
-large entire file in one action. JSON strings must escape newlines as \n.
+File writing protocol (one action per call): raw is the DEFAULT for writes.
+The first line is a JSON header with format=raw and no data field, followed by
+an exact ---CONTENT--- line, then literal UTF-8 file content through end-of-message:
+{"action":"write","path":"declared.py","format":"raw","more":true}
+---CONTENT---
+first chunk of literal file content
 
-Single small file:
-{"action":"write","path":"declared.py","data":"small complete file\n","more":false}
-First chunk (write replaces the file):
-{"action":"write","path":"declared.py","data":"first chunk\n","more":true}
-Middle chunk (append preserves existing bytes):
-{"action":"append","path":"declared.py","data":"next chunk\n","more":true}
-Final chunk:
-{"action":"append","path":"declared.py","data":"last chunk\n","more":false}
+Use action=append for subsequent chunks; more=true while chunks remain and
+more=false for the final chunk (or a single complete file). Raw content needs
+no JSON escaping and may itself contain ---CONTENT--- lines. Preserve intended
+newlines, including the final newline. Raw and JSON chunks may mix.
+Keep each complete action within 4096 UTF-8 bytes (or the runtime's smaller
+limit), counting header, separator and literal payload bytes. Use smaller chunks
+for Unicode. For small content, JSON remains accepted:
+{"action":"write","path":"declared.py","data":"small file\n","more":false}
 
-Wait for each receipt before emitting the next chunk. A partial file remains
-unfinished even though its bytes are checkpointed for integrity. Continue from
-its last successful receipt; never resend accepted bytes. A denied or malformed
-action writes no bytes: retry that chunk smaller. Do not finish or write a ready
-handoff until every file has its final chunk accepted. Chunking grants no new
-paths or acceptance authority.
-
+Wait for each receipt. Never resend accepted bytes. A denied action writes no
+bytes; retry only that chunk smaller. Finish only after every final chunk is
+accepted. Chunking grants no new paths or acceptance authority.
 
 Do not hand-write handoff.json. Once deliverables are complete, emit
 {"action":"finish","summary":"factual account","open_discrepancies":[]}.

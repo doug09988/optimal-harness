@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 from .ledger import Ledger
-from .model import SYSTEM_PREFIX, parse_action, ModelError
+from .model import SYSTEM_PREFIX, RawWritePrompt, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
@@ -115,6 +115,11 @@ async def run_task(engine, task):
         return canonical({'action': 'write', 'path': path, 'data': {'slots': {
             key: {'status': 'gap', 'detail': 'Describe the actual gap'} for key in LIFECYCLE}}})
 
+    raw_writer = task['stage'] in ('CODER', 'INTEGRATOR', 'FIXER')
+
+    def raw_template(path, content='Small complete file or first chunk', more=True):
+        return canonical({'action': 'write', 'path': path, 'format': 'raw', 'more': more}) + '\n---CONTENT---\n' + content
+
     action_format_errors = 0
     coder_handoff_errors = 0
     finish_feedback = ''
@@ -123,6 +128,9 @@ async def run_task(engine, task):
                       f'ONE complete JSON action at most {chunk_limit} UTF-8 bytes including escaping. '
                       'First write with more=true, then append with more=true; final append more=false. '
                       'Rejected actions wrote no bytes; retry only the rejected chunk.')
+    if raw_writer:
+        chunk_feedback = (chunk_feedback.replace('ONE complete JSON action', 'ONE complete action (raw header + separator + literal payload, or JSON)')
+                          .replace('including escaping', 'counting literal UTF-8 bytes for raw payloads'))
     manifest = {'task': task['id'], 'generation': task['generation'], 'role': task['stage'],
                 'budget': ledger.budget, 'budget_scope': 'shared_stage_task_all_generations', 'static_prefix_sha256': hashlib.sha256(SYSTEM_PREFIX.encode()).hexdigest(),
                 'charter_sha256': plan['charter_hashes'][f"vault/charters/{task['stage'].lower()}.md"],
@@ -186,7 +194,12 @@ async def run_task(engine, task):
                        'Files in checkpointed are already written; do not repeat those writes. '
                        'Once all deliverables are checkpointed, finish with summary=<factual summary> and '
                        'open_discrepancies=<list of actual gaps; [] only if none>. Runtime generates the handoff. '
-                       'Respond with ONE next JSON action only.')
+                       + ('Respond with ONE next action only.' if raw_writer else 'Respond with ONE next JSON action only.'))
+            if raw_writer:
+                prompt += ('\nWRITE PROTOCOL: For writes and appends, use format=raw by default: first line JSON header without data, '
+                           'then an exact ---CONTENT--- line, then literal content through end-of-message. '
+                           'Do not stop at the header closing brace. JSON data is a small-content alternative. '
+                           'Read, command, finish and fail still use one JSON object.\n' + chunk_feedback)
             missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
             commands = {cmd['capture']: name for name, cmd in conf.get('commands', {}).items()}
             if missing:
@@ -194,7 +207,8 @@ async def run_task(engine, task):
                 next_step = ('Run named command ' + commands[target] if target in commands else
                              ('Continue ' + target + ' using action=append; final chunk more=false' if target in partial else
                               'Create ' + target + ' using action=write, path=' + target +
-                              ', data=<file text or first chunk>, more=<true if chunks remain>'))
+                              (', format=raw followed by separator and literal file text, more=<true if chunks remain>' if raw_writer else
+                               ', data=<file text or first chunk>, more=<true if chunks remain>')))
             elif handoff not in checkpoints:
                 next_step = 'Emit action=finish with summary and open_discrepancies; runtime generates ' + handoff
             else:
@@ -219,6 +233,9 @@ async def run_task(engine, task):
                 sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
                            if confined(root, path).is_file()}
                 prompt = qa.prompt(sources)
+                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+            if raw_writer:
+                prompt = RawWritePrompt(prompt)
                 manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
             cap, timeout = ledger.reserve(prompt, getattr(prompt, "system_prefix", SYSTEM_PREFIX))
             if review is not None:
@@ -283,9 +300,10 @@ async def run_task(engine, task):
                 first = ''
                 try:
                     decoder = json.JSONDecoder()
-                    _, end = decoder.raw_decode(result.text.lstrip())
-                    first = result.text.lstrip()[:end]
-                    if result.text.lstrip()[end:].strip():
+                    header, end = decoder.raw_decode(result.text.lstrip())
+                    is_raw = isinstance(header, dict) and header.get('format') == 'raw'
+                    first = result.text if is_raw else result.text.lstrip()[:end]
+                    if not is_raw and result.text.lstrip()[end:].strip():
                         store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
                                     'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
                     if len(first.encode('utf-8')) > chunk_limit:
@@ -299,6 +317,10 @@ async def run_task(engine, task):
                     template = (intake_template(conf['deliverables'][0]) if task['stage'] == 'INTAKE' else
                                 canonical({'action': 'write', 'path': (conf.get('deliverables') or ['output.txt'])[0],
                                            'data': 'Small complete file or first chunk', 'more': True}))
+                    if raw_writer:
+                        template = raw_template((conf.get('deliverables') or ['output.txt'])[0])
+                        last = last.replace('exactly one JSON action; JSON documents may use object-valued data.',
+                                            'exactly one action; use the raw write template for file content.')
                     last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
                     if action_format_errors >= 3:
                         raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks; template: ' + template)
@@ -401,8 +423,7 @@ async def run_task(engine, task):
                                 raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc) + '; template: ' + finish_template) from exc
                             raise PolicyError('CODER handoff schema: ' + str(exc) +
                                               '. Rewrite the complete handoff object; then finish. Template: ' +
-                                              canonical({'action': 'write', 'path': handoff, 'data': {
-                                                  'status': 'ready', 'open_discrepancies': []}})) from exc
+                                              raw_template(handoff, canonical({'status': 'ready', 'open_discrepancies': []}), False)) from exc
                     if task['stage'] == 'INTAKE' and action['path'] in conf.get('deliverables', []):
                         try:
                             if op != 'write':

@@ -203,7 +203,8 @@ class RuntimeTests(unittest.TestCase):
             observation = prompt.split('LAST TOOL OBSERVATION', 1)[1]
             template = observation.split('Action template: ', 1)[1]
             value, _ = json.JSONDecoder().raw_decode(template)
-            parse_action(json.dumps(value))
+            self.assertEqual(value['format'], 'raw')
+            parse_action(json.dumps(value) + '\n---CONTENT---\nexample')
             self.assertIn(value['path'], self.plan['stages']['CODER']['deliverables'])
             self.assertLess(len(json.dumps(value).encode()), 4096)
             return {'action': 'fail', 'reason': 'template checked'}
@@ -435,7 +436,10 @@ class RuntimeTests(unittest.TestCase):
             template = prompt.split('Template: ', 1)[1]
             value, _ = json.JSONDecoder().raw_decode(template)
             self.assertTrue(value['path'].endswith('/handoff.json'))
-            ready_document(value['data'])
+            from optimal_harness.model import parse_action
+            raw = template.split('\n---CONTENT---\n', 1)[1]
+            payload, _ = json.JSONDecoder().raw_decode(raw)
+            ready_document(parse_action(json.dumps(value) + '\n---CONTENT---\n' + json.dumps(payload))['data'])
             return self.coder_handoff({'status': 'ready', 'open_discrepancies': []})(prompt)
         task = self.run_coder([
             {'action': 'write', 'path': 'wordfreq.py', 'data': '# implementation'},
@@ -492,6 +496,77 @@ class RuntimeTests(unittest.TestCase):
                 ready_document(value)
         value = {'status': 'ready', 'open_discrepancies': ['unresolved']}
         self.assertEqual(ready_document(json.dumps(value)), value)
+
+    @staticmethod
+    def raw_action(path, data, op='write', more=False):
+        return json.dumps({'action': op, 'path': path, 'format': 'raw', 'more': more}) + '\n---CONTENT---\n' + data
+
+    def test_raw_payload_round_trip_and_mixed_chunks(self):
+        content = '  "quotes" \\path\n---CONTENT---\n☃\r\nlast line\n'
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': 'prefix\n', 'more': True},
+            self.raw_action('wordfreq.py', content, 'append', True),
+            {'action': 'append', 'path': 'wordfreq.py', 'data': 'suffix', 'more': False},
+            self.raw_action('test_unit.py', content),
+            {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual((self.root/'wordfreq.py').read_bytes(), ('prefix\n' + content + 'suffix').encode())
+        self.assertEqual((self.root/'test_unit.py').read_bytes(), content.encode())
+
+    def test_raw_chunk_limit_counts_utf8_bytes_and_shows_raw_template(self):
+        def corrected(prompt):
+            self.assertIn('"format":"raw"', prompt)
+            self.assertIn('---CONTENT---', prompt)
+            self.assertIn('Rejected actions wrote no bytes', prompt)
+            self.assertFalse((self.root/'wordfreq.py').exists())
+            return self.raw_action('wordfreq.py', 'accepted')
+        task = self.run_coder([
+            self.raw_action('wordfreq.py', '☃' * 1400), corrected,
+            self.raw_action('test_unit.py', '# tests'),
+            {'action': 'finish', 'summary': 'done', 'open_discrepancies': []}])
+        self.assertEqual(task['status'], 'SUCCEEDED')
+        self.assertEqual((self.root/'wordfreq.py').read_bytes(), b'accepted')
+
+    def test_raw_writes_retain_broker_scope_and_file_byte_caps(self):
+        from optimal_harness.model import parse_action
+        broker = FileBroker(self.root, [], ['allowed'], max_bytes=5)
+        first = parse_action(self.raw_action('allowed', 'é', more=True))
+        broker.write(first['path'], first['data'])
+        final = parse_action(self.raw_action('allowed', '☃', 'append'))
+        broker.write(final['path'], final['data'], append=True)
+        self.assertEqual((self.root/'allowed').read_bytes(), 'é☃'.encode())
+        for path, text, append in (('allowed', 'x', True), ('forbidden', 'x', False),
+                                   ('../escape', 'x', False)):
+            action = parse_action(self.raw_action(path, text, 'append' if append else 'write'))
+            with self.assertRaises(PolicyError):
+                broker.write(action['path'], action['data'], append=append)
+        self.assertEqual((self.root/'allowed').read_bytes(), 'é☃'.encode())
+
+    def test_writer_system_instructions_default_to_raw(self):
+        from optimal_harness.model import RawWritePrompt, SYSTEM_PREFIX
+        self.assertIn('format=raw', RawWritePrompt.system_prefix)
+        self.assertNotIn('Your entire reply MUST be one JSON object', RawWritePrompt.system_prefix)
+        self.assertNotIn('format=raw', SYSTEM_PREFIX)
+        for role in ('coder', 'integrator', 'fixer'):
+            text = (BASE/'optimal_harness/charters'/ (role + '.md')).read_text()
+            self.assertIn('raw is the DEFAULT', text)
+            self.assertIn('---CONTENT---', text)
+
+    def test_raw_parser_rejects_malformed_headers_and_preserves_payload(self):
+        from optimal_harness.model import parse_action, ModelError
+        content = '\n---CONTENT---\n{"action":"fail","reason":"literal"}\n  '
+        self.assertEqual(parse_action(self.raw_action('x', content))['data'], content)
+        self.assertEqual(parse_action(self.raw_action('x', ''))['data'], '')
+        self.assertEqual(parse_action('{"action":"write","path":"x","data":"legacy"}')['data'], 'legacy')
+        for text in (
+            '{"action":"write","path":"x","format":"raw","data":"ambiguous"}\n---CONTENT---\nx',
+            '{"action":"write","path":"x","format":"raw"}\n ---CONTENT---\nx',
+            '{"action":"write","path":"x","format":"raw"}\nmissing',
+            '{"action":"read","path":"x","format":"raw"}\n---CONTENT---\nx',
+            '{"action":"append","path":"x","format":"raw","more":1}\n---CONTENT---\nx',
+            '{"action":"write","path":"x","format":"raw","extra":true}\n---CONTENT---\nx'):
+            with self.subTest(text=text), self.assertRaises(ModelError):
+                parse_action(text)
 
     def test_coder_invalid_size_retries_are_bounded_without_writes(self):
         task = self.run_coder([{'action': 'write', 'path': 'wordfreq.py', 'data': 'x'*5000}] * 3)

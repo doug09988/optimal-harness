@@ -35,6 +35,20 @@ was attempted. A completed run must have its declared artifacts on disk.
 """
 
 
+class RawWritePrompt(str):
+    """Writer-only system instructions; driven stage prefixes remain unchanged."""
+    system_prefix = SYSTEM_PREFIX.replace(
+        "Your entire reply MUST be one JSON object with exactly one action.\n"
+        "STOP after that object's closing brace.",
+        "Your entire reply MUST be exactly one action. For writes and appends, use\n"
+        "a first-line JSON header with format=raw and no data, then an exact\n"
+        "---CONTENT--- line, then literal UTF-8 content through end-of-message.\n"
+        "JSON data is a small-content alternative. For all other actions, STOP\n"
+        "after the JSON object's closing brace.").replace(
+        "For JSON deliverables, prefer a JSON object as data instead of an escaped string:",
+        "Small JSON deliverables may alternatively use object-valued data:")
+
+
 class ModelError(RuntimeError):
     pass
 
@@ -235,8 +249,25 @@ class ModelQueue:
 
 
 def parse_action(text: str) -> dict:
+    # Split only the framing lines; the payload is never stripped or re-scanned.
+    header, newline, remainder = text.partition('\n')
     try:
-        action = json.loads(text)
+        candidate = json.loads(header) if newline else None
+    except json.JSONDecodeError:
+        candidate = None
+    raw = isinstance(candidate, dict) and candidate.get('format') == 'raw'
+    if raw:
+        separator, boundary, payload = remainder.partition('\n')
+        if (candidate.get('action') not in ('write', 'append') or 'data' in candidate or
+                separator not in ('---CONTENT---', '---CONTENT---\r') or
+                (not boundary and separator != '---CONTENT---')):
+            raise ModelError('invalid raw write framing')
+        action = dict(candidate)
+        del action['format']
+        action['data'] = payload
+    try:
+        if not raw:
+            action = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ModelError("worker emitted invalid JSON") from exc
     if not isinstance(action, dict) or action.get("action") not in ("read", "write", "append", "command", "finish", "fail"):
