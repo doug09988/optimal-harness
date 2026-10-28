@@ -130,7 +130,7 @@ class RuntimeTests(unittest.TestCase):
         from optimal_harness.review import SECTIONS, section_template, validate_section
         from optimal_harness.model import parse_action
         for section in SECTIONS:
-            for mode in ('schema', 'oversized', 'whole', 'unidentifiable'):
+            for mode in ('schema', 'oversized', 'unidentifiable'):
                 with self.subTest(section=section, mode=mode):
                     if section != SECTIONS[0] or mode != 'schema':
                         self.setUp()
@@ -143,8 +143,6 @@ class RuntimeTests(unittest.TestCase):
                     bad = {'action': 'write', 'path': target, 'data': {section: None}}
                     if mode == 'oversized':
                         bad['data'][section] = 'x' * 5000
-                    elif mode == 'whole':
-                        bad['data'] = {key: [] for key in SECTIONS}
                     elif mode == 'unidentifiable':
                         bad = '{'
                     # Accept earlier sections so unidentifiable writes charge this section.
@@ -270,10 +268,69 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('review_section_exhausted:counterexamples', task['failure'])
         self.assertFalse((self.root/target).exists())
 
-    def test_review_rejects_whole_document_and_chunks(self):
+    def test_review_all_sections_in_one_write(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        report = {'reviewed_stage': '', 'counterexamples': ['attempt missing input'],
+                  'observations': ['observed'], 'unresolved': []}
+        def first(prompt):
+            self.assertIn('normally submit several or all four sections in one write', prompt)
+            return {'action': 'write', 'path': target, 'data': report}
+        task = self.run_coder([first,
+            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []}], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(json.loads((self.root/target).read_text()), report)
+
+    def test_review_mixed_sections_only_invalid_burn_budget(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        def write(data):
+            return {'action': 'write', 'path': target, 'data': data}
+        def correction(prompt):
+            observation = prompt.split('LAST TOOL OBSERVATION', 1)[1].split('SAVED RUN STATE', 1)[0]
+            self.assertIn('REVIEW section counterexamples', observation)
+            self.assertIn('template:', observation)
+            self.assertNotIn('REVIEW section reviewed_stage:', observation)
+            self.assertNotIn('REVIEW section observations:', observation)
+            self.assertIn('accepted_this_write', observation)
+            return write({'counterexamples': ['attempt'], 'unresolved': []})
+        task = self.run_coder([
+            write({'reviewed_stage': '', 'observations': [], 'counterexamples': []}),
+            write({'reviewed_stage': '', 'observations': [], 'counterexamples': [' ']}),
+            correction,
+            # Valid sections appeared repeatedly without spending their budget.
+            write({'reviewed_stage': '', 'observations': [], 'unresolved': []}),
+            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []}], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+
+    def test_review_mixed_invalid_section_exhausts_only_its_budget(self):
         target = self.plan['stages']['REVIEW']['deliverables'][0]
         task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': {'observations': [], 'unresolved': []}},
+            {'action': 'write', 'path': target, 'data': {
+                'reviewed_stage': '', 'observations': [], 'counterexamples': value}}
+            for value in ([], [''], [' '])], role='REVIEW')
+        self.assertIn('review_section_exhausted:counterexamples', task['failure'])
+        self.assertNotIn('review_section_exhausted:reviewed_stage', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 3)
+
+    def test_review_unknown_keys_do_not_charge_known_sections(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        def inspect(prompt):
+            observation = prompt.split('LAST TOOL OBSERVATION', 1)[1].split('SAVED RUN STATE', 1)[0]
+            self.assertIn('unknown section', observation)
+            self.assertIn('surprise', observation)
+            self.assertNotIn('invalid submissions=', observation)
+            return {'action': 'write', 'path': target, 'data': {
+                'reviewed_stage': '', 'counterexamples': ['attempt'], 'observations': [], 'unresolved': []}}
+        task = self.run_coder([
+            {'action': 'write', 'path': target, 'data': {'surprise': i, 'observations': []}}
+            for i in range(3)] + [inspect,
+            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []}], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertNotIn('surprise', json.loads((self.root/target).read_text()))
+
+    def test_review_rejects_malformed_documents_and_chunks(self):
+        target = self.plan['stages']['REVIEW']['deliverables'][0]
+        task = self.run_coder([
+            {'action': 'write', 'path': target, 'data': '{'},
             {'action': 'write', 'path': target, 'data': '{', 'more': True},
             {'action': 'append', 'path': target, 'data': '}'},
         ], role='REVIEW')

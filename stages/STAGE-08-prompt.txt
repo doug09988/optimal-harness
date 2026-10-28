@@ -1,0 +1,50 @@
+# STAGE-08 — Accept superset section writes in REVIEW (fixer)
+
+Role: FIXER. Branch: codex/stage-08-review-superset, cut
+from codex/stage-07-denial-templates. Sandbox rules as
+before: .git read-only (no commits; leave the worktree
+complete), no model endpoint access, stdlib only, never
+modify examples/graders, ~/harness, ~/vault.
+
+ROOT CAUSE (coordinator-read from the primary board record
+of live run wordcounter-verify-08, events 64/69): REVIEW
+failed review_section_exhausted:reviewed_stage even though
+stage 7's templates were present in every denial. The
+worker's final submission was a single write whose data
+contained ALL FOUR sections with valid content — rejected
+because the stage-6 protocol insists on exactly one section
+per write, and charged to reviewed_stage. Earlier attempts
+show the same whole-document instinct. The model is not
+failing to learn the shape; the protocol is rejecting a
+valid superset submission. Three mechanisms have now failed
+on REVIEW conformance (whole-doc staging, single-section
+strictness, templates alone) — this stage re-specs the
+interaction instead of tightening it further.
+
+FIX:
+1. REVIEW writes may carry ANY subset of the four sections
+in one action (one, several, or all). Validate each present
+section independently against its schema fragment: accept
+valid sections, reject invalid ones individually with the
+existing template feedback naming only the invalid ones.
+2. Retry accounting is per section and ONLY invalid sections
+burn a retry; a submission containing at least one newly
+accepted section counts as progress (no exhaustion progress
+for valid sections). review_section_exhausted:<section>
+remains for a section that is invalid three times.
+3. Unknown keys in data remain rejected (named in feedback,
+no retry charged to any known section). Assembly, the full-
+schema finish gate, and all other gates unchanged. The
+first observation and charter present multi-section writes
+as the normal path.
+4. Nothing else changes: INTAKE, CODER, handoffs,
+obligations untouched.
+
+TESTS: all-four-in-one accepted and assembled; mixed
+valid+invalid accepts valid and feeds back only the invalid
+with template; invalid section burns only its own budget;
+unknown key rejected without charging known sections;
+single-section path still works; scripted pipeline green;
+full suite green. DELIVERABLE: code + tests +
+stages/STAGE-08-result.md with exact sandbox outcomes; no
+live claims.

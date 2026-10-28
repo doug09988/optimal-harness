@@ -171,7 +171,7 @@ async def run_task(engine, task):
             raise PolicyError('pinned input or charter changed')
         broker, evidence, handoff, brief = engine._prepare(root, task)
         if task['stage'] == 'REVIEW':
-            last = ('REVIEW sections — one action per section; example content must reflect your work:\n' +
+            last = ('REVIEW sections — normally submit several or all four sections in one write; any subset is accepted. Example content must reflect your work:\n' +
                     '\n'.join(key + ': ' + review_template(key) for key in SECTIONS))
             last_observation = last
         manifest['evidence'], manifest['handoff'] = evidence, handoff
@@ -212,7 +212,7 @@ async def run_task(engine, task):
             if ledger.calls == 0 and plan['spec'] in task['brief']['permitted_reads']:
                 next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
             if task['stage'] == 'REVIEW' and missing:
-                next_step = ('Write ONE review section to ' + missing[0] + ', data={' +
+                next_step = ('Write several or all remaining review sections to ' + missing[0] + ', data={' +
                              canonical(next_review_section()) + ': <section value>}; accepted sections are retained')
             if finish_feedback:
                 next_step = finish_feedback
@@ -222,8 +222,8 @@ async def run_task(engine, task):
                 prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
             if task['stage'] == 'REVIEW':
                 next_step = next_review_section()
-                prompt += ('\nREVIEW SECTION WORKFLOW: Submit ONE named section per write, data={"<section>": <value>}, '
-                           'more=false; no append or whole-document chunks. Each action is bounded to ' + str(chunk_limit) +
+                prompt += ('\nREVIEW SECTION WORKFLOW: Submit any subset of the four named sections per write, normally several or all, data={"<section>": <value>, ...}, '
+                           'more=false; no append or chunks. Each action is bounded to ' + str(chunk_limit) +
                            ' UTF-8 bytes. Accepted sections may be rewritten independently. '
                            'counterexamples must contain at least one nonempty ATTEMPTED case even when no defect is found. '
                            'Accepted=' + canonical(list(review_sections)) + '; missing=' +
@@ -278,7 +278,7 @@ async def run_task(engine, task):
                             section = next(iter(payload))
                     except (ValueError, TypeError, AttributeError):
                         pass
-                    last = (review_reject(section, str(exc)) + '\nSubmit ONE small section per write; accepted sections are retained. '
+                    last = (review_reject(section, str(exc)) + '\nSubmit a smaller complete subset of sections per write; accepted sections are retained. '
                             'counterexamples requires at least one nonempty ATTEMPTED case even when no defect is found.'
                             '\nLAST SUCCESSFUL TOOL OBSERVATION:\n' + last_observation)
                     continue
@@ -406,29 +406,45 @@ async def run_task(engine, task):
                             raise PolicyError('Template (fill with actual gaps or citations): ' +
                                               intake_template(path) + '; ' + str(exc)) from exc
                     if task['stage'] == 'REVIEW' and path in conf.get('deliverables', []):
-                        section = next_review_section()
                         try:
                             payload = json.loads(data) if isinstance(data, str) else data
-                            if isinstance(payload, dict) and len(payload) == 1:
-                                key = next(iter(payload))
-                                if key in SECTIONS:
-                                    section = key
-                            if (op != 'write' or action.get('more', False) or
-                                    not isinstance(payload, dict) or len(payload) != 1 or
-                                    next(iter(payload)) not in SECTIONS):
-                                raise PolicyError('submit ONE named section per write, data={"<section>": <value>}; no chunks')
-                            validate_section(section, payload[section], task['brief']['prior_stage'])
-                            candidate = review_sections | {section: payload[section]}
-                            if len(candidate) == len(SECTIONS):
-                                validate_document(candidate, task['brief']['prior_stage'])
-                                write_checkpoint(path, canonical(candidate) + '\n')
-                            review_sections = candidate
+                            if op != 'write' or action.get('more', False) or not isinstance(payload, dict):
+                                raise PolicyError('submit a complete object containing any subset of review sections; no append or chunks')
                         except (PolicyError, ValueError) as exc:
-                            raise PolicyError(review_reject(section, str(exc))) from exc
+                            raise PolicyError(review_reject(next_review_section(), str(exc))) from exc
+                        accepted, rejected, exhausted = [], [], []
+                        candidate = dict(review_sections)
+                        for section, value in payload.items():
+                            if section not in SECTIONS:
+                                rejected.append('REVIEW unknown section ' + repr(section) + ': rejected; no section retry charged')
+                                continue
+                            try:
+                                validate_section(section, value, task['brief']['prior_stage'])
+                            except PolicyError as exc:
+                                try:
+                                    rejected.append(review_reject(section, str(exc)))
+                                except RuntimeError as terminal:
+                                    exhausted.append(str(terminal))
+                            else:
+                                candidate[section] = value
+                                accepted.append(section)
+                        newly_accepted = set(candidate) - set(review_sections)
+                        if len(candidate) == len(SECTIONS):
+                            validate_document(candidate, task['brief']['prior_stage'])
+                            write_checkpoint(path, canonical(candidate) + '\n')
+                        review_sections = candidate
+                        if newly_accepted:
+                            repeat = 0
+                            seen_actions.clear()
                         finish_feedback = ''
-                        last = canonical({'accepted_section': section, 'accepted_sections': list(review_sections),
+                        last = canonical({'accepted_sections': list(review_sections),
+                                          'accepted_this_write': accepted,
                                           'missing_sections': [key for key in SECTIONS if key not in review_sections],
                                           'assembled': path if len(review_sections) == len(SECTIONS) else None})
+                        if rejected:
+                            last += '\n' + '\n'.join(rejected)
+                        if exhausted:
+                            raise RuntimeError('; '.join(exhausted))
                         last_observation = last
                         store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                                     'op': op, 'path_or_name': path, 'receipt': last})

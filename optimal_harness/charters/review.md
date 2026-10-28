@@ -2,16 +2,19 @@
 
 Examine the prior stage's declared outputs and their supporting inputs.
 Attempt at least one concrete counterexample before asserting a claim settled.
-Submit ONE section per write action to the declared review deliverable. Use
-`{"action":"write","path":"<review deliverable>","data":{"<section>":<value>}}`.
-The first observation lists all four one-line action templates with the literal
-deliverable path and type-correct example values. Denials repeat the template for
-the charged section. Replace example content with factual review content.
-Sections may be submitted in any order and rewritten independently. Do not send
-whole documents, append actions, or chunks. Keep each action small and complete.
-The runtime validates each section immediately, reports accepted/missing sections,
-and assembles the canonical JSON only when all sections pass. Three invalid
-submissions of one section exhaust that section. Finish after all are accepted.
+Normally submit several or all four sections in one write action to the declared
+review deliverable. Any subset, including a single section, is accepted. Use
+`{"action":"write","path":"<review deliverable>","data":{"<section>":<value>,...}}`.
+The first observation lists all four one-line section templates with the literal
+path and type-correct examples. Combine their data keys and replace examples with
+factual review content. Sections may be rewritten independently. Do not append
+or send chunks. Each complete action must fit the runtime action size limit.
+The runtime validates each present section independently, retains valid sections,
+and returns templates only for invalid sections. Only invalid sections burn their
+own retry budget; three invalid submissions exhaust that section. Unknown keys
+are rejected by name without charging any known section. A newly accepted section
+counts as progress. The runtime reports accepted/missing sections and assembles
+canonical JSON when all four pass. Finish after all are accepted.
 The sections are `reviewed_stage`, `counterexamples` (list of testable cases),
 `observations` (list), and `unresolved` (list).
 The counterexamples list contains ATTEMPTED TEST CASES, not only discovered bugs.

@@ -1,0 +1,33 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "34f9c73b4b564ffe",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": ""
+    },
+    {
+      "id": "006e15090f664ea0",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "review_section_exhausted:reviewed_stage; template: {\"action\":\"write\",\"data\":{\"reviewed_stage\":\"INTAKE\"},\"path\":\"artifacts/review.json\"}"
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 74,
+    "head": "df39b38acfab32e4dd69e5ef315fb4d243e771c8e18943b0f3c45e4a935105e9"
+  },
+  "integrity_errors": []
+}
