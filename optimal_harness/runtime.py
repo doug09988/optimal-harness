@@ -10,7 +10,7 @@ from .model import SYSTEM_PREFIX, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
-from .review import SECTIONS, validate_section, validate_document, section_template
+from .review import DrivenReview
 
 
 
@@ -104,12 +104,7 @@ async def run_task(engine, task):
     intake_format_errors = 0
     partial = set()
     structured_chunks = {}
-    review_sections = {}
-    review_errors = {}
-
-    def review_template(section):
-        return section_template(conf['deliverables'][0], section, task['brief']['prior_stage'])
-
+    review = DrivenReview(task['brief']['prior_stage']) if task['stage'] == 'REVIEW' else None
     finish_template = canonical({'action': 'finish', 'summary': 'Describe completed work',
                                  'open_discrepancies': []})
 
@@ -118,14 +113,6 @@ async def run_task(engine, task):
         return canonical({'action': 'write', 'path': path, 'data': {'slots': {
             key: {'status': 'gap', 'detail': 'Describe the actual gap'} for key in LIFECYCLE}}})
 
-    def review_reject(section, reason):
-        review_errors[section] = review_errors.get(section, 0) + 1
-        if review_errors[section] >= 3:
-            raise RuntimeError("review_section_exhausted:" + section + "; template: " + review_template(section))
-        return "REVIEW section " + section + ": template: " + review_template(section) + "; " + reason + "; invalid submissions=" + str(review_errors[section])
-
-    def next_review_section():
-        return next((key for key in SECTIONS if key not in review_sections), SECTIONS[0])
     action_format_errors = 0
     coder_handoff_errors = 0
     finish_feedback = ''
@@ -175,10 +162,6 @@ async def run_task(engine, task):
         if not engine._pins_intact(plan, root):
             raise PolicyError('pinned input or charter changed')
         broker, evidence, handoff, brief = engine._prepare(root, task)
-        if task['stage'] == 'REVIEW':
-            last = ('REVIEW sections — normally submit several or all four sections in one write; any subset is accepted. Example content must reflect your work:\n' +
-                    '\n'.join(key + ': ' + review_template(key) for key in SECTIONS))
-            last_observation = last
         manifest['evidence'], manifest['handoff'] = evidence, handoff
         trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
         while True:
@@ -216,27 +199,23 @@ async def run_task(engine, task):
                 next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
             if manifest.get('calls_dispatched', 0) == 0 and plan['spec'] in task['brief']['permitted_reads']:
                 next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
-            if task['stage'] == 'REVIEW' and missing:
-                next_step = ('Write several or all remaining review sections to ' + missing[0] + ', data={' +
-                             canonical(next_review_section()) + ': <section value>}; accepted sections are retained')
             if finish_feedback:
                 next_step = finish_feedback
             prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
             prompt += '\nCompleted model calls across this stage task: ' + str(ledger.calls)
             if last.startswith('{') and '"content":' in last:
                 prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
-            if task['stage'] == 'REVIEW':
-                next_step = next_review_section()
-                prompt += ('\nREVIEW SECTION WORKFLOW: Submit any subset of the four named sections per write, normally several or all, data={"<section>": <value>, ...}, '
-                           'more=false; no append or chunks. Each action is bounded to ' + str(chunk_limit) +
-                           ' UTF-8 bytes. Accepted sections may be rewritten independently. '
-                           'counterexamples must contain at least one nonempty ATTEMPTED case even when no defect is found. '
-                           'Accepted=' + canonical(list(review_sections)) + '; missing=' +
-                           canonical([key for key in SECTIONS if key not in review_sections]) +
-                           '; next section=' + next_step + '; finish after all sections are accepted.')
-            else:
-                prompt += '\nCHUNK RULE: ' + chunk_feedback
-            cap, timeout = ledger.reserve(prompt, SYSTEM_PREFIX)
+            prompt += '\nCHUNK RULE: ' + chunk_feedback
+            if review is not None:
+                # REVIEW owns progression; no action-loop instructions enter its prompt.
+                sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
+                           if confined(root, path).is_file()}
+                prompt = review.prompt(review.section_sources(
+                    sources, plan['stages'].get(review.prior_stage, {}).get('deliverables', [])))
+                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+            cap, timeout = ledger.reserve(prompt, getattr(prompt, "system_prefix", SYSTEM_PREFIX))
+            if review is not None:
+                cap = min(cap, review.completion_cap)
             store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
                         'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
                         'completion_cap': cap})
@@ -257,47 +236,50 @@ async def run_task(engine, task):
                 raise RuntimeError("circuit_breaker:board_attempt_budget")
             if ledger.seconds >= ledger.budget['max_seconds']:
                 raise RuntimeError('circuit_breaker:wall_clock_after_call')
-            first = ''
-            try:
-                decoder = json.JSONDecoder()
-                _, end = decoder.raw_decode(result.text.lstrip())
-                first = result.text.lstrip()[:end]
-                if result.text.lstrip()[end:].strip():
-                    store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
-                                'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
-                if len(first.encode('utf-8')) > chunk_limit:
-                    raise ModelError('encoded action exceeds chunk limit')
-                action = parse_action(first)
-            except (ModelError, ValueError) as exc:
-                # A bounded correction is fresh, not replay of malformed history.
-                last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
-                        + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
-                if task['stage'] == 'REVIEW':
-                    section = next_review_section()
-                    try:
-                        candidate = json.loads(first)
-                        payload = candidate.get('data', {})
-                        if isinstance(payload, str):
-                            payload = json.loads(payload)
-                        if isinstance(payload, dict) and len(payload) == 1 and next(iter(payload)) in SECTIONS:
-                            section = next(iter(payload))
-                    except (ValueError, TypeError, AttributeError):
-                        pass
-                    last = (review_reject(section, str(exc)) + '\nSubmit a smaller complete subset of sections per write; accepted sections are retained. '
-                            'counterexamples requires at least one nonempty ATTEMPTED case even when no defect is found.'
-                            '\nLAST SUCCESSFUL TOOL OBSERVATION:\n' + last_observation)
+            if review is not None:
+                section = review.current
+                try:
+                    action = review.accept(result.text)
+                except PolicyError as exc:
+                    last = str(exc)
+                    store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
+                    review.reject(last)
                     continue
-                action_format_errors += 1
-                template = (intake_template(conf['deliverables'][0]) if task['stage'] == 'INTAKE' else
-                            canonical({'action': 'write', 'path': (conf.get('deliverables') or ['output.txt'])[0],
-                                       'data': 'Small complete file or first chunk', 'more': True}))
-                last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
-                if action_format_errors >= 3:
-                    raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks; template: ' + template)
-                repeat += 1
-                if repeat >= 3:
-                    raise RuntimeError('error:no_progress:invalid_actions')
-                continue
+                last = canonical({'accepted_sections': list(review.sections),
+                                  'accepted_this_write': [section] if section != 'verdict' else [],
+                                  'missing_sections': review.missing})
+                store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                            'op': 'write', 'path_or_name': conf['deliverables'][0], 'receipt': last})
+                if action is None:
+                    continue
+                write_checkpoint(conf['deliverables'][0], canonical(review.document()) + '\n')
+            else:
+                first = ''
+                try:
+                    decoder = json.JSONDecoder()
+                    _, end = decoder.raw_decode(result.text.lstrip())
+                    first = result.text.lstrip()[:end]
+                    if result.text.lstrip()[end:].strip():
+                        store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
+                                    'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
+                    if len(first.encode('utf-8')) > chunk_limit:
+                        raise ModelError('encoded action exceeds chunk limit')
+                    action = parse_action(first)
+                except (ModelError, ValueError) as exc:
+                    # A bounded correction is fresh, not replay of malformed history.
+                    last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
+                            + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
+                    action_format_errors += 1
+                    template = (intake_template(conf['deliverables'][0]) if task['stage'] == 'INTAKE' else
+                                canonical({'action': 'write', 'path': (conf.get('deliverables') or ['output.txt'])[0],
+                                           'data': 'Small complete file or first chunk', 'more': True}))
+                    last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
+                    if action_format_errors >= 3:
+                        raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized actions; use smaller chunks; template: ' + template)
+                    repeat += 1
+                    if repeat >= 3:
+                        raise RuntimeError('error:no_progress:invalid_actions')
+                    continue
             op = action['action']
             signature = canonical(action)
             repeat = repeat + 1 if signature == previous else 0
@@ -410,50 +392,6 @@ async def run_task(engine, task):
                                 raise RuntimeError('intake_format_exhausted:three invalid documents; no artifact accepted; template: ' + intake_template(path))
                             raise PolicyError('Template (fill with actual gaps or citations): ' +
                                               intake_template(path) + '; ' + str(exc)) from exc
-                    if task['stage'] == 'REVIEW' and path in conf.get('deliverables', []):
-                        try:
-                            payload = json.loads(data) if isinstance(data, str) else data
-                            if op != 'write' or action.get('more', False) or not isinstance(payload, dict):
-                                raise PolicyError('submit a complete object containing any subset of review sections; no append or chunks')
-                        except (PolicyError, ValueError) as exc:
-                            raise PolicyError(review_reject(next_review_section(), str(exc))) from exc
-                        accepted, rejected, exhausted = [], [], []
-                        candidate = dict(review_sections)
-                        for section, value in payload.items():
-                            if section not in SECTIONS:
-                                rejected.append('REVIEW unknown section ' + repr(section) + ': rejected; no section retry charged')
-                                continue
-                            try:
-                                validate_section(section, value, task['brief']['prior_stage'])
-                            except PolicyError as exc:
-                                try:
-                                    rejected.append(review_reject(section, str(exc)))
-                                except RuntimeError as terminal:
-                                    exhausted.append(str(terminal))
-                            else:
-                                candidate[section] = value
-                                accepted.append(section)
-                        newly_accepted = set(candidate) - set(review_sections)
-                        if len(candidate) == len(SECTIONS):
-                            validate_document(candidate, task['brief']['prior_stage'])
-                            write_checkpoint(path, canonical(candidate) + '\n')
-                        review_sections = candidate
-                        if newly_accepted:
-                            repeat = 0
-                            seen_actions.clear()
-                        finish_feedback = ''
-                        last = canonical({'accepted_sections': list(review_sections),
-                                          'accepted_this_write': accepted,
-                                          'missing_sections': [key for key in SECTIONS if key not in review_sections],
-                                          'assembled': path if len(review_sections) == len(SECTIONS) else None})
-                        if rejected:
-                            last += '\n' + '\n'.join(rejected)
-                        if exhausted:
-                            raise RuntimeError('; '.join(exhausted))
-                        last_observation = last
-                        store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
-                                    'op': op, 'path_or_name': path, 'receipt': last})
-                        continue
                     if isinstance(data, (dict, list)):
                         data = canonical(data) + "\n"
                     intake_target = task['stage'] == 'INTAKE' and path in conf.get('deliverables', [])
@@ -537,6 +475,8 @@ async def run_task(engine, task):
 
 def model_side_failure(reason):
     """Allowlist runtime protocol failures; verifier, integrity and budgets stay terminal."""
+    if reason == 'model_request_killed_on_deadline':
+        return True
     if reason.startswith('error:no_progress:'):
         return True
     prefixes = ['review_section_exhausted:', 'intake_format_exhausted:']

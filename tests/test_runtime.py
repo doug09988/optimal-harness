@@ -39,13 +39,13 @@ class RuntimeTests(unittest.TestCase):
             count=c.execute("SELECT count(*) FROM events WHERE kind='additional_actions_discarded'").fetchone()[0]
         self.assertEqual(count,1)
 
-    def run_coder(self, actions, role='CODER'):
+    def run_coder(self, actions, role='CODER', prior_stage=''):
         from optimal_harness.engine import make_brief
         from unittest.mock import patch
         self.submit()
         task = self.store.claim('worker', 60)
         task['stage'] = role
-        task['brief'] = make_brief(role, self.store.project('wordcounter')['plan'])
+        task['brief'] = make_brief(role, self.store.project('wordcounter')['plan'], source_stage=prior_stage)
         class Queue(FakeQueue):
             async def request(q, prompt, *args):
                 q.calls += 1
@@ -126,43 +126,6 @@ class RuntimeTests(unittest.TestCase):
         doc = json.loads((self.root/'artifacts/intake.json').read_text())
         self.assertEqual(doc['slots']['invocation']['quote'], text)
 
-    def test_review_templates_first_observation_and_all_denials(self):
-        from optimal_harness.review import SECTIONS, section_template, validate_section
-        from optimal_harness.model import parse_action
-        for section in SECTIONS:
-            for mode in ('schema', 'oversized', 'unidentifiable'):
-                with self.subTest(section=section, mode=mode):
-                    if section != SECTIONS[0] or mode != 'schema':
-                        self.setUp()
-                    target = self.plan['stages']['REVIEW']['deliverables'][0]
-                    templates = {key: section_template(target, key, '') for key in SECTIONS}
-                    for key, template in templates.items():
-                        action = parse_action(template)
-                        self.assertEqual(action['path'], target)
-                        validate_section(key, action['data'][key], '')
-                    bad = {'action': 'write', 'path': target, 'data': {section: None}}
-                    if mode == 'oversized':
-                        bad['data'][section] = 'x' * 5000
-                    elif mode == 'unidentifiable':
-                        bad = '{'
-                    # Accept earlier sections so unidentifiable writes charge this section.
-                    prefix = [json.loads(templates[key]) for key in SECTIONS[:SECTIONS.index(section)]]
-                    def correction(prompt):
-                        denial = prompt.split('LAST TOOL OBSERVATION', 1)[1].split('SAVED RUN STATE', 1)[0]
-                        self.assertIn('REVIEW section ' + section, denial)
-                        self.assertIn('template: ' + templates[section], denial)
-                        return json.loads(templates[section])
-                    actions = prefix + [bad, correction, {'action': 'fail', 'reason': 'test stop'}]
-                    original = actions[0]
-                    def check_first(prompt):
-                        observation = prompt.split('LAST TOOL OBSERVATION', 1)[1]
-                        for key in SECTIONS:
-                            self.assertIn(key + ': ' + templates[key], observation)
-                        return original
-                    actions[0] = check_first
-                    task = self.run_coder(actions, role='REVIEW')
-                    self.assertIn('test stop', task['failure'])
-
     def test_review_template_uses_literal_prior_stage(self):
         from optimal_harness.review import section_template, validate_section
         value = json.loads(section_template('artifacts/review.json', 'reviewed_stage', 'INTAKE'))
@@ -197,56 +160,156 @@ class RuntimeTests(unittest.TestCase):
         task = self.run_coder([{'action': 'write', 'path': target, 'data': {}}, correction], role='INTAKE')
         self.assertIn('template checked', task['failure'])
 
-    def test_review_sections_rewrite_feedback_and_full_assembly(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        def write(key, value):
-            return {'action': 'write', 'path': target, 'data': {key: value}}
+    def test_review_system_contract_reaches_client_without_network(self):
+        import pickle
+        from unittest.mock import MagicMock, patch
+        from optimal_harness.model import LocalChatClient, SYSTEM_PREFIX
+        from optimal_harness.review import DrivenReview
+        prompt = pickle.loads(pickle.dumps(DrivenReview('CODER').prompt({'wordfreq.py': 'source body'})))
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {}
+        response.read.return_value = json.dumps({
+            'choices': [{'message': {'content': 'CODER'}}],
+            'usage': {'prompt_tokens': 10, 'completion_tokens': 2}}).encode()
+        opener = MagicMock()
+        opener.open.return_value = response
+        with patch('urllib.request.build_opener', return_value=opener):
+            client = LocalChatClient('http://127.0.0.1:9999', 'scripted')
+            client.complete(prompt, 20, 5)
+            payload = json.loads(opener.open.call_args[0][0].data)
+            self.assertEqual(payload['messages'][0]['content'], prompt.system_prefix)
+            self.assertIn('source body', payload['messages'][1]['content'])
+            self.assertNotIn('one JSON object', payload['messages'][0]['content'])
+            client.complete('ordinary action prompt', 20, 5)
+            payload = json.loads(opener.open.call_args[0][0].data)
+            self.assertEqual(payload['messages'][0]['content'], SYSTEM_PREFIX)
+
+    def test_review_driven_plain_text_and_events(self):
+        task = self.run_coder(['""', 'ATTEMPTED missing input', 'Observed input checks', '', 'APPROVE'], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        report = json.loads((self.root/'artifacts/review.json').read_text())
+        self.assertEqual(report, {'reviewed_stage': '', 'counterexamples': ['ATTEMPTED missing input'],
+                                 'observations': ['Observed input checks'], 'unresolved': [], 'verdict': 'APPROVE'})
+        self.assertEqual(self.engine.queue.calls, 5)
+        with self.store.transaction() as c:
+            for kind in ('model_call_started', 'model_call_finished', 'tool_action'):
+                self.assertEqual(c.execute('SELECT count(*) FROM events WHERE kind=?', (kind,)).fetchone()[0], 5)
+
+    def test_review_caps_and_prompt_diet(self):
+        marker = 'UNIQUE_ACCEPTED_COUNTEREXAMPLE'
+        def observation(prompt):
+            self.assertNotIn(marker, prompt)
+            self.assertNotIn('ACCEPTED SECTIONS', prompt)
+            return 'Observed facts'
+        def verdict(prompt):
+            self.assertIn(marker, prompt)
+            self.assertIn('Observed facts', prompt)
+            self.assertIn('exactly one line', prompt)
+            return 'APPROVE'
+        task = self.run_coder(['""', marker, observation, '', verdict], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        with self.store.transaction() as c:
+            events = c.execute("SELECT payload FROM events WHERE kind='model_call_started' ORDER BY rowid").fetchall()
+        self.assertEqual([json.loads(row[0])['completion_cap'] for row in events],
+                         [2048, 2048, 2048, 2048, 128])
+
+    def test_deadline_kill_leaves_queue_available_for_stage_retry(self):
+        from optimal_harness.model import ModelQueue, ModelError
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        queue = ModelQueue(SimpleNamespace(url='https://scripted.invalid'), self.base/'model.lock')
+        result = Completion('APPROVE', 10, 0, 1)
+        async def run():
+            await queue.start()
+            try:
+                with self.assertRaisesRegex(ModelError, 'model_request_killed_on_deadline'):
+                    await queue.request('scripted', 128, 1)
+                self.assertTrue(queue.healthy)
+                self.assertEqual(await queue.request('scripted retry', 128, 1), result)
+            finally:
+                await queue.stop()
+        with patch.object(queue, '_locked_request', side_effect=[
+                ModelError('model_request_killed_on_deadline'), result]):
+            asyncio.run(run())
+
+    def test_review_source_spans(self):
+        from optimal_harness.review import DrivenReview
+        review = DrivenReview('INTAKE')
+        review.accept('INTAKE')
+        artifact = json.dumps({'source': 'spec.md', 'start_line': 2, 'end_line': 2})
+        sources = review.section_sources({'intake.json': artifact,
+                                          'spec.md': 'unrelated before\nrelevant\nunrelated after'},
+                                         ['intake.json'])
+        prompt = review.prompt(sources)
+        self.assertIn(artifact.replace('"', '\\"'), prompt)
+        self.assertIn('2: relevant', prompt)
+        self.assertNotIn('unrelated before', prompt)
+        self.assertNotIn('unrelated after', prompt)
+
+    def test_review_envelope_extraction(self):
+        values = {'reviewed_stage': '', 'counterexamples': ['ATTEMPTED missing input'],
+                  'observations': ['fact'], 'unresolved': []}
+        actions = [{'action': 'write', 'data': {key: value}} for key, value in values.items()]
+        task = self.run_coder(actions + ['REQUEST_CHANGES'], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(json.loads((self.root/'artifacts/review.json').read_text()),
+                         dict(values, verdict='REQUEST_CHANGES'))
+
+    def test_review_identical_text_progresses(self):
+        task = self.run_coder(['CODER'] * 4 + ['APPROVE'], role='REVIEW', prior_stage='CODER')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 5)
+        report = json.loads((self.root/'artifacts/review.json').read_text())
+        for section in ('counterexamples', 'observations', 'unresolved'):
+            self.assertEqual(report[section], ['CODER'])
+
+    def test_review_invalid_section_reasks_only_that_section(self):
         def correction(prompt):
-            self.assertIn('ATTEMPTED test case even when no defect is found', prompt)
-            self.assertIn('accepted_sections', prompt)
-            self.assertFalse((self.root/target).exists())
-            return write('counterexamples', ['attempt missing input'])
-        def rewrite(prompt):
-            self.assertIn('accepted_section', prompt)
-            return write('observations', ['revised observation'])
-        task = self.run_coder([
-            write('reviewed_stage', ''), write('observations', ['original']),
-            write('counterexamples', []), correction, rewrite,
-            write('unresolved', []),
-            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []},
-        ], role='REVIEW')
+            self.assertIn('SECTION: counterexamples', prompt)
+            self.assertIn('VALIDATOR REASON:', prompt)
+            self.assertIn('must contain at least one nonempty ATTEMPTED', prompt)
+            self.assertNotIn('SECTION: reviewed_stage', prompt)
+            return 'ATTEMPTED missing input'
+        task = self.run_coder(['""', '[]', correction, '', '', 'APPROVE'], role='REVIEW')
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
-        report = json.loads((self.root/target).read_text())
-        self.assertEqual(report, {'reviewed_stage': '', 'counterexamples': ['attempt missing input'],
-                                 'observations': ['revised observation'], 'unresolved': []})
-        from optimal_harness.review import validate_document
-        validate_document(report, '')
+        self.assertEqual(self.engine.queue.calls, 6)
 
-    def test_review_independent_budgets_and_rewrite_after_assembly(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        def write(key, value):
-            return {'action': 'write', 'path': target, 'data': {key: value}}
-        def rejected_rewrite(prompt):
-            self.assertIn('REVIEW section counterexamples', prompt)
-            self.assertEqual(json.loads((self.root/target).read_text())['counterexamples'], ['attempt'])
-            return write('counterexamples', ['revised attempt'])
-        task = self.run_coder([
-            write('observations', {}), write('observations', None), write('observations', []),
-            write('unresolved', {}), write('unresolved', None), write('unresolved', []),
-            write('reviewed_stage', ''), write('counterexamples', ['attempt']),
-            write('counterexamples', []), rejected_rewrite,
-            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []},
-        ], role='REVIEW')
+    def test_review_independent_section_budgets(self):
+        task = self.run_coder(['wrong', 'wrong', '""', '[]', '[]', 'attempt',
+                               '{}', '{}', '', 'null', 'null', '', 'APPROVE'], role='REVIEW')
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
-        self.assertEqual(json.loads((self.root/target).read_text())['counterexamples'], ['revised attempt'])
+        self.assertEqual(self.engine.queue.calls, 13)
 
-    def test_review_oversized_section_has_own_budget(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': {'counterexamples': ['x' * 5000]}}
-        ] * 3, role='REVIEW')
+    def test_review_section_exhaustion(self):
+        task = self.run_coder(['""', '[]', '[]', '[]'], role='REVIEW')
         self.assertIn('review_section_exhausted:counterexamples', task['failure'])
-        self.assertFalse((self.root/target).exists())
+        self.assertEqual(self.engine.queue.calls, 4)
+        self.assertFalse((self.root/'artifacts/review.json').exists())
+
+    def test_review_unextractable_envelope(self):
+        def correction(prompt):
+            self.assertIn('unextractable_response', prompt)
+            return '""'
+        task = self.run_coder([{'action': 'read', 'path': 'spec.md'}, correction,
+                               'attempt', '', '', 'APPROVE'], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+
+    def test_review_verdict_reask(self):
+        def corrected(prompt):
+            self.assertIn('unparseable_verdict', prompt)
+            return 'APPROVE\nReview evidence follows.'
+        task = self.run_coder(['""', 'attempt', '', '', 'garbage', corrected], role='REVIEW')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 6)
+
+    def test_review_two_invalid_verdicts_are_model_failure(self):
+        from optimal_harness.runtime import model_side_failure
+        task = self.run_coder(['""', 'attempt', '', '', ' APPROVE', 'APPROVE extra'], role='REVIEW')
+        self.assertIn('review_action_format_exhausted:verdict', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertEqual(self.engine.queue.calls, 6)
+        self.assertFalse((self.root/'artifacts/review.json').exists())
 
     def test_review_section_schema_feedback(self):
         from optimal_harness.review import validate_section
@@ -257,85 +320,6 @@ class RuntimeTests(unittest.TestCase):
                                      ('unresolved', None, 'must be a list')]:
             with self.subTest(key=key), self.assertRaisesRegex(PolicyError, expected):
                 validate_section(key, value, 'CODER')
-
-    def test_review_per_section_exhaustion(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        def write(key, value):
-            return {'action': 'write', 'path': target, 'data': {key: value}}
-        task = self.run_coder([write('counterexamples', []), write('observations', {}),
-                               write('counterexamples', ['']), write('observations', []),
-                               write('counterexamples', [' '])], role='REVIEW')
-        self.assertIn('review_section_exhausted:counterexamples', task['failure'])
-        self.assertFalse((self.root/target).exists())
-
-    def test_review_all_sections_in_one_write(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        report = {'reviewed_stage': '', 'counterexamples': ['attempt missing input'],
-                  'observations': ['observed'], 'unresolved': []}
-        def first(prompt):
-            self.assertIn('normally submit several or all four sections in one write', prompt)
-            return {'action': 'write', 'path': target, 'data': report}
-        task = self.run_coder([first,
-            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []}], role='REVIEW')
-        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
-        self.assertEqual(json.loads((self.root/target).read_text()), report)
-
-    def test_review_mixed_sections_only_invalid_burn_budget(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        def write(data):
-            return {'action': 'write', 'path': target, 'data': data}
-        def correction(prompt):
-            observation = prompt.split('LAST TOOL OBSERVATION', 1)[1].split('SAVED RUN STATE', 1)[0]
-            self.assertIn('REVIEW section counterexamples', observation)
-            self.assertIn('template:', observation)
-            self.assertNotIn('REVIEW section reviewed_stage:', observation)
-            self.assertNotIn('REVIEW section observations:', observation)
-            self.assertIn('accepted_this_write', observation)
-            return write({'counterexamples': ['attempt'], 'unresolved': []})
-        task = self.run_coder([
-            write({'reviewed_stage': '', 'observations': [], 'counterexamples': []}),
-            write({'reviewed_stage': '', 'observations': [], 'counterexamples': [' ']}),
-            correction,
-            # Valid sections appeared repeatedly without spending their budget.
-            write({'reviewed_stage': '', 'observations': [], 'unresolved': []}),
-            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []}], role='REVIEW')
-        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
-
-    def test_review_mixed_invalid_section_exhausts_only_its_budget(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': {
-                'reviewed_stage': '', 'observations': [], 'counterexamples': value}}
-            for value in ([], [''], [' '])], role='REVIEW')
-        self.assertIn('review_section_exhausted:counterexamples', task['failure'])
-        self.assertNotIn('review_section_exhausted:reviewed_stage', task['failure'])
-        self.assertEqual(self.engine.queue.calls, 3)
-
-    def test_review_unknown_keys_do_not_charge_known_sections(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        def inspect(prompt):
-            observation = prompt.split('LAST TOOL OBSERVATION', 1)[1].split('SAVED RUN STATE', 1)[0]
-            self.assertIn('unknown section', observation)
-            self.assertIn('surprise', observation)
-            self.assertNotIn('invalid submissions=', observation)
-            return {'action': 'write', 'path': target, 'data': {
-                'reviewed_stage': '', 'counterexamples': ['attempt'], 'observations': [], 'unresolved': []}}
-        task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': {'surprise': i, 'observations': []}}
-            for i in range(3)] + [inspect,
-            {'action': 'finish', 'summary': 'reviewed', 'open_discrepancies': []}], role='REVIEW')
-        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
-        self.assertNotIn('surprise', json.loads((self.root/target).read_text()))
-
-    def test_review_rejects_malformed_documents_and_chunks(self):
-        target = self.plan['stages']['REVIEW']['deliverables'][0]
-        task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': '{'},
-            {'action': 'write', 'path': target, 'data': '{', 'more': True},
-            {'action': 'append', 'path': target, 'data': '}'},
-        ], role='REVIEW')
-        self.assertIn('review_section_exhausted:reviewed_stage', task['failure'])
-        self.assertFalse((self.root/target).exists())
 
     def test_generated_handoff_exhaustion_reports_error_without_acceptance(self):
         task = self.run_coder([
@@ -607,7 +591,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root/'artifacts/intake.json').read_text()),audit)
         with self.store.transaction() as c:
             denials=[json.loads(r[0]) for r in c.execute("SELECT payload FROM events WHERE kind='tool_denied'")]
-        self.assertEqual(len(denials),1)
+        self.assertEqual(len([d for d in denials if d['task'] == self.store.tasks('wordcounter')[0]['id']]),1)
         self.assertIn('missing=exit_behavior',denials[0]['reason'])
         self.assertEqual(parse_action('{"action":"write","path":"x.json","data":[]}')['data'],[])
 
@@ -767,6 +751,34 @@ class StageRetryTests(unittest.TestCase):
         self.assertEqual(reports, 3)
         self.assertTrue(self.store.audit()['valid'])
 
+    def test_deadline_kill_retries_with_shared_budget(self):
+        from optimal_harness.model import ModelError
+        from optimal_harness.verifier import LIFECYCLE
+        from unittest.mock import patch
+        lines = [line for line in (self.root/'spec.md').read_text().splitlines() if ':' in line]
+        audit = {'slots': {key: {'status': 'citation', 'quote': line, 'because': 'Explicit requirement'}
+                           for key, line in zip(LIFECYCLE, lines)}}
+        class Queue(FakeQueue):
+            async def request(q, prompt, max_tokens, timeout):
+                if q.calls == 0:
+                    q.calls += 1
+                    raise ModelError('model_request_killed_on_deadline')
+                return await super().request(prompt, max_tokens, timeout)
+        self.engine.queue = Queue([{'action': 'write', 'path': 'artifacts/intake.json', 'data': audit},
+                                   {'action': 'finish', 'summary': 'Complete', 'open_discrepancies': []}])
+        self.submit()
+        with patch.object(self.engine, '_advance'):
+            asyncio.run(self.engine.serve())
+        task = self.store.tasks('wordcounter')[0]
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(task['attempts'], 2)
+        self.assertEqual(task['attempt_failures'][0]['reason'], 'model_request_killed_on_deadline')
+        self.assertEqual(self.store.stage_usage(task)['calls'], 2)
+        with self.store.transaction() as c:
+            starts = c.execute('SELECT started FROM attempt_usage WHERE task=?', (task['id'],)).fetchall()
+        self.assertEqual(len(starts), 2)
+        self.assertLessEqual(starts[0][0], starts[1][0])
+
     def test_budget_exhaustion_prevents_retry(self):
         self.plan['stages']['INTAKE']['budget'] = {'max_calls': 3}
         self.engine.queue = FakeQueue([{'action': 'unknown_' + str(i)} for i in range(3)])
@@ -792,9 +804,9 @@ class StageRetryTests(unittest.TestCase):
         for reason in ('circuit_breaker:model_calls', 'citation_check_failed:x',
                        'modified-after-checkpoint:x', 'obligation_unaddressed:x',
                        'error:missing_deliverables:x', 'honest_worker_failure:x',
-                       'pinned input or charter changed'):
+                       'pinned input or charter changed', 'model_request_killed_on_deadline_extra'):
             self.assertFalse(model_side_failure(reason), reason)
-        for reason in ('review_section_exhausted:observations', 'coder_handoff_exhausted:x',
+        for reason in ('model_request_killed_on_deadline', 'review_section_exhausted:observations', 'coder_handoff_exhausted:x',
                        'error:no_progress:invalid_actions', 'error:no_progress:repeated_action'):
             self.assertTrue(model_side_failure(reason), reason)
 

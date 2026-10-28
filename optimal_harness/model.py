@@ -66,7 +66,7 @@ class LocalChatClient:
     def complete(self, prompt: str, max_tokens: int, timeout: float) -> Completion:
         payload = json.dumps({
             "model": self.model, "temperature": 0, "max_tokens": max_tokens,
-            "messages": [{"role": "system", "content": SYSTEM_PREFIX},
+            "messages": [{"role": "system", "content": getattr(prompt, "system_prefix", SYSTEM_PREFIX)},
                          {"role": "user", "content": prompt}],
         }).encode()
         request = Request(self.url, data=payload, headers={"Content-Type": "application/json"})
@@ -221,7 +221,10 @@ class ModelQueue:
                     if not future.done():
                         future.set_result(result)
             except Exception as exc:
-                if "queue_timeout_before_execution" not in str(exc):
+                # A deadline kill has already terminated and joined the child;
+                # allow the bounded stage-attempt policy to retry on this lane.
+                if ("queue_timeout_before_execution" not in str(exc) and
+                        str(exc) != "model_request_killed_on_deadline"):
                     self.healthy = False
                 if not future.done():
                     # Do not export this live pump's traceback: callers (notably
