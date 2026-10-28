@@ -38,6 +38,9 @@ class Store:
                     generation INTEGER NOT NULL DEFAULT 0, brief TEXT NOT NULL,
                     failure TEXT NOT NULL DEFAULT '', FOREIGN KEY(project_id) REFERENCES projects(id)
                 );
+                CREATE TABLE IF NOT EXISTS artifact_best (
+                    project TEXT PRIMARY KEY, body TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS defect_counts (
                     project TEXT NOT NULL, defect TEXT NOT NULL, repeats INTEGER NOT NULL,
                     PRIMARY KEY(project,defect)
@@ -361,7 +364,9 @@ class Store:
             row = c.execute("SELECT * FROM projects WHERE id=?", (project,)).fetchone()
             if not row:
                 raise KeyError(project)
-            return dict(row) | {"plan": json.loads(row["plan"])}
+            return dict(row) | {"plan": json.loads(row["plan"]),
+                                "best_artifact": (lambda best: json.loads(best['body']) if best else None)(
+                                    c.execute("SELECT body FROM artifact_best WHERE project=?", (project,)).fetchone())}
 
     def projects(self) -> list[dict]:
         with self.transaction() as c:
@@ -379,6 +384,27 @@ class Store:
         with self.transaction() as c:
             c.execute("UPDATE projects SET status=? WHERE id=?", (status, project))
             self._event(c, "project_status", {"project": project, "status": status, "reason": reason})
+
+    def best_artifact(self, project):
+        with self.transaction() as c:
+            row = c.execute("SELECT body FROM artifact_best WHERE project=?", (project,)).fetchone()
+            return json.loads(row['body']) if row else None
+
+    def record_evaluation(self, project, failure_count, fingerprint, failures, snapshot):
+        """Retain checkpoint references only, and replace the best strictly on improvement."""
+        candidate = dict(failure_count=failure_count, fingerprint=fingerprint,
+                         failures=failures, snapshot=snapshot)
+        with self.transaction() as c:
+            row = c.execute("SELECT body FROM artifact_best WHERE project=?", (project,)).fetchone()
+            best = json.loads(row['body']) if row else None
+            if best is None or failure_count < best['failure_count']:
+                best = candidate
+                c.execute("INSERT OR REPLACE INTO artifact_best VALUES(?,?)", (project, canonical(best)))
+            regression = failure_count > best['failure_count']
+            self._event(c, 'artifact_evaluated', dict(project=project, **candidate,
+                        best_failure_count=best['failure_count'],
+                        status='REGRESSION' if regression else 'EVALUATED'))
+            return best, regression
 
     def failure_cycle(self, project: str, defect: str) -> tuple[int, int]:
         with self.transaction() as c:

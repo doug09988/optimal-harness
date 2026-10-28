@@ -295,6 +295,40 @@ class Engine:
             result['passed'] = False
             result['open_discrepancies'] += 1
 
+    @staticmethod
+    def _failure_count(results):
+        # Acceptance runners bundle multiple failing tests into one checker result.
+        import re
+        count = 0
+        for item in results:
+            if item['passed']:
+                continue
+            summaries = re.findall(r"FAILED \(([^)]+)\)", item['error'] or '')
+            counts = re.findall(r"(?:failures|errors)=(\d+)", summaries[-1]) if summaries else []
+            count += max(1, sum(map(int, counts)))
+        return count
+
+    def _artifact_snapshot(self, project, plan):
+        paths = set(plan.get('implementation_paths', []))
+        paths.update(plan['stages']['FIXER'].get('writes', []))
+        latest = {cp['path']: cp for cp in self.store.checkpoints(project)}
+        return [cp for path, cp in latest.items() if path in paths]
+
+    def _restore_artifact(self, project, root, best):
+        # Publish restored references as the latest checkpoints too, so integrity
+        # checks and the project deliverable agree with the working bytes.
+        snapshot = best['snapshot']
+        data = [(cp, confined(root, cp['archive']).read_bytes()) for cp in snapshot]
+        if any(hashlib.sha256(body).hexdigest() != cp['sha256'] for cp, body in data):
+            raise PolicyError('best artifact checkpoint archive tampered')
+        restore_id = 'restore-' + uuid.uuid4().hex
+        with self.store.transaction() as c:
+            for cp, body in data:
+                atomic_write(confined(root, cp['path']), body)
+                self.store.checkpoint(c, dict(id=restore_id, generation=0, project_id=project),
+                                      cp['path'], cp['sha256'], cp['archive'])
+            self.store._event(c, 'artifact_restored', dict(project=project, best=best))
+
     def _gate(self, project: str, plan: dict, root: Path) -> None:
         errors = self.integrity_errors(project, root)
         if errors:
@@ -317,16 +351,28 @@ class Engine:
                "bubblewrap required" in str(r["error"]) for r in result["results"]):
             self.store.project_status(project, "ESCALATED", "independent verifier sandbox unavailable")
             return
+        failures = [r["error"] for r in result["results"] if not r["passed"]]
+        from .failures import fingerprint as defect_fingerprint
+        fingerprint = defect_fingerprint(failures, root)
+        count = self._failure_count(result['results'])
+        best, regression = self.store.record_evaluation(
+            project, count, fingerprint, failures, self._artifact_snapshot(project, plan))
+        if regression:
+            self._restore_artifact(project, root, best)
         if result["passed"] and result["open_discrepancies"] == 0:
             self.store.project_status(project, "AWAITING_COORDINATOR", "machine gate passed; cloud grade required")
             return
         # A defect signature derives only from independent deterministic failures.
-        failures = [r["error"] for r in result["results"] if not r["passed"]]
         notes = "\n".join(failures)
-        from .failures import fingerprint as defect_fingerprint
-        fingerprint = defect_fingerprint(failures, root)
+        if regression:
+            fingerprint = best['fingerprint']
+            notes = (f"REGRESSION: best failure count: {best['failure_count']}; "
+                     f"regressed failure count: {count}. Best artifact restored.\n"
+                     + "\n".join(best['failures']))
         cycle, repeats = self.store.failure_cycle(project, fingerprint)
         if repeats >= 3:
+            if not regression:
+                self._restore_artifact(project, root, best)
             self.store.project_status(project, "ESCALATED", "three failed cycles on same defect: " + notes)
         else:
             self.store.enqueue(project, "FIXER", cycle, make_brief("FIXER", plan, notes, "QA"))
