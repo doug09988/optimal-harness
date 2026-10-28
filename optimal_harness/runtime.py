@@ -11,6 +11,7 @@ from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
 from .review import DrivenReview
+from .qa import DrivenQA
 
 
 
@@ -105,6 +106,7 @@ async def run_task(engine, task):
     partial = set()
     structured_chunks = {}
     review = DrivenReview(task['brief']['prior_stage']) if task['stage'] == 'REVIEW' else None
+    qa = DrivenQA() if task['stage'] == 'QA' else None
     finish_template = canonical({'action': 'finish', 'summary': 'Describe completed work',
                                  'open_discrepancies': []})
 
@@ -213,6 +215,11 @@ async def run_task(engine, task):
                 prompt = review.prompt(review.section_sources(
                     sources, plan['stages'].get(review.prior_stage, {}).get('deliverables', [])))
                 manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+            if qa is not None:
+                sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
+                           if confined(root, path).is_file()}
+                prompt = qa.prompt(sources)
+                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
             cap, timeout = ledger.reserve(prompt, getattr(prompt, "system_prefix", SYSTEM_PREFIX))
             if review is not None:
                 cap = min(cap, review.completion_cap)
@@ -236,7 +243,26 @@ async def run_task(engine, task):
                 raise RuntimeError("circuit_breaker:board_attempt_budget")
             if ledger.seconds >= ledger.budget['max_seconds']:
                 raise RuntimeError('circuit_breaker:wall_clock_after_call')
-            if review is not None:
+            if qa is not None:
+                try:
+                    action = qa.accept(result.text)
+                except PolicyError as exc:
+                    last = str(exc)
+                    store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
+                    qa.reject(last)
+                    action = None
+                if action is None:
+                    if qa.current != 'report' or qa.execution is not None:
+                        continue
+                    target = next(p for p in conf['deliverables'] if p.endswith('test_acceptance.py'))
+                    write_checkpoint(target, qa.assembly())
+                    last = canonical({'written': target, 'sha256': checkpoints[target],
+                                      'planned_tests': qa.plan, 'unwritable': qa.unwritable})
+                    store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                                'op': 'write', 'path_or_name': target, 'receipt': last})
+                    name = next(name for name, cmd in conf['commands'].items() if target in cmd.get('reads', []))
+                    action = {'action': 'command', 'name': name}
+            elif review is not None:
                 section = review.current
                 try:
                     action = review.accept(result.text)
@@ -434,6 +460,9 @@ async def run_task(engine, task):
                                 'containment': output.get('containment', 'test-double')}
                     receipt = await asyncio.to_thread(store.commit, task, command_effect)
                     last = canonical(receipt) + '\nFull output is at capture pointer. Read it if needed.'
+                    if qa is not None:
+                        qa.execution = confined(root, receipt['capture']).read_text()
+                        last += '\n' + qa.execution
                 last_observation = last
                 store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                             'op': op, 'path_or_name': action.get('path', action.get('name')), 'receipt': last})

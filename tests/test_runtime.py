@@ -59,7 +59,7 @@ class RuntimeTests(unittest.TestCase):
         return self.store.tasks('wordcounter')[0]
 
     def test_all_writing_roles_bound_invalid_actions(self):
-        for role in ('INTAKE', 'INTEGRATOR', 'QA', 'REVIEW', 'FIXER'):
+        for role in ('INTAKE', 'INTEGRATOR', 'REVIEW', 'FIXER'):
             with self.subTest(role=role):
                 # Each case needs a separate project/store.
                 if role != 'INTAKE':
@@ -71,15 +71,80 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(self.engine.queue.calls, 3)
                 self.assertFalse((self.root/'never-created').exists())
 
-    def test_qa_chunked_writes(self):
-        target = self.plan['stages']['QA']['deliverables'][0]
-        task = self.run_coder([
-            {'action': 'write', 'path': target, 'data': 'first', 'more': True},
-            {'action': 'append', 'path': target, 'data': 'last', 'more': False},
-            {'action': 'fail', 'reason': 'test stops after writes'},
-        ], role='QA')
-        self.assertEqual((self.root/target).read_text(), 'firstlast')
-        self.assertIn('test stops after writes', task['failure'])
+    def run_qa(self, replies):
+        from unittest.mock import patch
+        self.execution = {'exit_code': 0, 'reason': 'exited', 'seconds': 0.01,
+                          'stdout': 'test_one ... ok\ntest_two ... ok\n', 'stderr': 'output tail'}
+        with patch('optimal_harness.runtime.sandbox_command', return_value=self.execution):
+            return self.run_coder(replies, role='QA')
+
+    def test_driven_qa_assembles_exactly_planned_tests_and_reports_execution(self):
+        import ast
+        from optimal_harness.store import canonical
+        def report(prompt):
+            self.assertIn(canonical(self.execution) + '\n', prompt)
+            self.assertNotIn('Respond with ONE next JSON action', prompt)
+            self.assertNotIn('import sys\nprint', prompt)
+            return 'PASS\nObserved acceptance output.'
+        task = self.run_qa(['test_one\ntest_two\ntest_one',
+                            'def test_one(self):\n    self.assertTrue(True)',
+                            '```python\ndef test_two():\n    assert True\n```', report])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        tree = ast.parse((self.root/'test_acceptance.py').read_text())
+        methods = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+        self.assertEqual(methods, ['test_one', 'test_two'])
+        self.assertEqual(self.engine.queue.calls, 4)
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute("SELECT payload FROM events WHERE kind='tool_action'")]
+        self.assertTrue(any(canonical(self.execution) in e['receipt'] for e in events if e['op'] == 'command'))
+
+    def test_driven_qa_unwritable_does_not_kill_stage(self):
+        def report(prompt):
+            self.assertIn('test_bad', prompt)
+            self.assertIn('UNWRITABLE TESTS', prompt)
+            return 'FAIL\nOne test could not be written.'
+        task = self.run_qa(['test_bad\ntest_good', '', '',
+                            'def test_good(self):\n    self.assertTrue(True)', report])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        code = (self.root/'test_acceptance.py').read_text()
+        self.assertNotIn('def test_bad', code)
+        self.assertIn('def test_good', code)
+        handoff = json.loads(next(self.root.glob('vault/runs/*/a1/handoff.json')).read_text())
+        self.assertTrue(any('test_bad: unwritable' in gap for gap in handoff['open_discrepancies']))
+
+    def test_driven_qa_report_reasks_exactly_once(self):
+        def corrected(prompt):
+            self.assertIn('report first line must be exactly PASS or FAIL', prompt)
+            return 'PASS\nAcceptance checked.'
+        task = self.run_qa(['test_one', 'def test_one():\n    assert True', 'garbage', corrected])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 4)
+
+    def test_driven_qa_two_bad_reports_are_model_error(self):
+        from optimal_harness.runtime import model_side_failure
+        task = self.run_qa(['test_one', 'def test_one():\n    assert True', ' PASS', 'garbage'])
+        self.assertIn('qa_action_format_exhausted:report', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertEqual(self.engine.queue.calls, 4)
+
+    def test_driven_qa_plan_retry_and_bound(self):
+        from optimal_harness.qa import DrivenQA
+        from optimal_harness.runtime import model_side_failure
+        qa = DrivenQA()
+        qa.accept('\n'.join(['test_' + str(n) for n in range(45)]))
+        self.assertEqual(len(qa.plan), 40)
+        task = self.run_qa(['', '{"tests": []}'])
+        self.assertIn('qa_action_format_exhausted:plan', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertEqual(self.engine.queue.calls, 2)
+
+    def test_driven_qa_invalid_body_is_reasked_with_reason(self):
+        def corrected(prompt):
+            self.assertIn('VALIDATOR REASON:', prompt)
+            self.assertIn('test_one', prompt)
+            return 'def test_one(self):\n    self.assertTrue(True)'
+        task = self.run_qa(['test_one', 'def test_other():\n    pass', corrected, 'PASS'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
 
     def test_generated_handoff_shape_and_event_order(self):
         task = self.run_coder([

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import textwrap
 import unittest
 from optimal_harness.engine import Engine
 from optimal_harness.store import Store
@@ -47,6 +48,8 @@ class Unit(unittest.TestCase):
             self.assertEqual(json.loads(out.read_text()),[{'word':'a','count':2},{'word':'b','count':1}])
 '''
 QA=UNIT.replace('test_counts','test_empty').replace('["a","a","b"]','[]').replace("[{'word':'a','count':2},{'word':'b','count':1}]",'[]')
+QA_BODY = textwrap.dedent(QA.split('class Unit(unittest.TestCase):\n', 1)[1]).replace(
+    'def test_empty(self):', 'def test_empty(self):\n    from pathlib import Path')
 
 
 class RealPipeline(unittest.TestCase):
@@ -73,7 +76,7 @@ class RealPipeline(unittest.TestCase):
                 return [*[write('artifacts/review.json', {key: value}) for key, value in {'reviewed_stage':stage,'counterexamples':['missing input file'],'observations':[],'unresolved':[]}.items()],'APPROVE']
             def integration_and_qa():
                 return [write('artifacts/integration_notes.md','Real suite command follows.'),{'action':'command','name':'suite'},handoff,finish,*review('INTEGRATOR'),
-                        write('test_acceptance.py',QA),{'action':'command','name':'acceptance'},handoff,finish,*review('QA')]
+                        'test_empty', QA_BODY, 'PASS\nEmpty input acceptance test passed.', *review('QA')]
             def fix(prompt):
                 self.assertIn('independent acceptance failed:',prompt)
                 return write('wordfreq.py',CODE)
