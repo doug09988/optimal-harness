@@ -75,7 +75,7 @@ class RealPipeline(unittest.TestCase):
             def review(stage):
                 return [*[write('artifacts/review.json', {key: value}) for key, value in {'reviewed_stage':stage,'counterexamples':['missing input file'],'observations':[],'unresolved':[]}.items()],'APPROVE']
             def integration_and_qa():
-                return [write('artifacts/integration_notes.md','Real suite command follows.'),{'action':'command','name':'suite'},handoff,finish,*review('INTEGRATOR'),
+                return ['Real suite command follows.',*review('INTEGRATOR'),
                         'test_empty', QA_BODY, 'PASS\nEmpty input acceptance test passed.', *review('QA')]
             def fix(prompt):
                 self.assertIn('independent acceptance failed:',prompt)

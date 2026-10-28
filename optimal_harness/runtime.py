@@ -13,6 +13,7 @@ from .handoff import ready_document, compose_handoff
 from .review import DrivenReview
 from .qa import DrivenQA
 from .coder import DrivenCoder
+from .integrator import DrivenIntegrator
 
 
 
@@ -117,7 +118,7 @@ async def run_task(engine, task):
         return canonical({'action': 'write', 'path': path, 'data': {'slots': {
             key: {'status': 'gap', 'detail': 'Describe the actual gap'} for key in LIFECYCLE}}})
 
-    raw_writer = task['stage'] in ('INTEGRATOR', 'FIXER')
+    raw_writer = task['stage'] == 'FIXER'
 
     def raw_template(path, content='Small complete file or first chunk', more=True):
         return canonical({'action': 'write', 'path': path, 'format': 'raw', 'more': more}) + '\n---CONTENT---\n' + content
@@ -251,6 +252,7 @@ async def run_task(engine, task):
             # trust an uncheckpointed on-disk file merely because it exists.
             for path, body in coder.bodies.items():
                 write_checkpoint(path, body, chunks=storage_chunks(body))
+        integrator = DrivenIntegrator() if task['stage'] == 'INTEGRATOR' else None
         while True:
             store.assert_lease(task)
             if coder is not None and coder.current == 'check' and coder.unwritable:
@@ -269,227 +271,234 @@ async def run_task(engine, task):
                 last_observation = last
                 store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                             'op': 'command', 'path_or_name': name, 'receipt': last})
-            progress = canonical({'checkpointed': sorted(set(checkpoints) - partial),
-                                  'missing_deliverables': [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial],
-                                  'partial_files_continue_appending': sorted(partial), 'handoff_path': handoff, 'evidence_path': evidence})
-            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
-            context_task = dict(task)
-            context_task['brief'] = dict(task['brief']) | {
-                'deliverables': missing,
-                'already_checkpointed_do_not_repeat': sorted(set(checkpoints) - partial),
-                'role_work_complete': not missing,
-                'current_goal': ('Produce remaining deliverables only' if missing else
-                                 'The role work is ALREADY COMPLETE. Finish with summary and open_discrepancies.'),
-            }
-            prompt = engine._context(root, context_task, broker, last) + '\nSAVED RUN STATE:\n' + progress
-            prompt += ('\nEXECUTION RULE: The LAST TOOL OBSERVATION has ALREADY EXECUTED. '
-                       'Do not request that same read again. Use the returned content to do the next step. '
-                       'Files in checkpointed are already written; do not repeat those writes. '
-                       'Once all deliverables are checkpointed, finish with summary=<factual summary> and '
-                       'open_discrepancies=<list of actual gaps; [] only if none>. Runtime generates the handoff. '
-                       + ('Respond with ONE next action only.' if raw_writer else 'Respond with ONE next JSON action only.'))
-            if raw_writer:
-                prompt += ('\nWRITE PROTOCOL: For writes and appends, use format=raw by default: first line JSON header without data, '
-                           'then an exact ---CONTENT--- line, then literal content through end-of-message. '
-                           'Do not stop at the header closing brace. JSON data is a small-content alternative. '
-                           'Read, command, finish and fail still use one JSON object.\n' + chunk_feedback)
-            missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
-            commands = {cmd['capture']: name for name, cmd in conf.get('commands', {}).items()}
-            if missing:
-                target = missing[0]
-                next_step = ('Run named command ' + commands[target] if target in commands else
-                             ('Continue ' + target + ' using action=append; final chunk more=false' if target in partial else
-                              'Create ' + target + ' using action=write, path=' + target +
-                              (', format=raw followed by separator and literal file text, more=<true if chunks remain>' if raw_writer else
-                               ', data=<file text or first chunk>, more=<true if chunks remain>')))
-            elif handoff not in checkpoints:
-                next_step = 'Emit action=finish with summary and open_discrepancies; runtime generates ' + handoff
+            if integrator is not None:
+                action = await integrator.run(engine, task, plan, root, conf, ledger, manifest,
+                                              broker, write_checkpoint, storage_chunks, execute_command,
+                                              trusted_write, evidence, checkpoints)
             else:
-                next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
-            if manifest.get('calls_dispatched', 0) == 0 and plan['spec'] in task['brief']['permitted_reads']:
-                next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
-            if finish_feedback:
-                next_step = finish_feedback
-            prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
-            prompt += '\nCompleted model calls across this stage task: ' + str(ledger.calls)
-            if last.startswith('{') and '"content":' in last:
-                prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
-            prompt += '\nCHUNK RULE: ' + chunk_feedback
-            if review is not None:
-                # REVIEW owns progression; no action-loop instructions enter its prompt.
-                sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
-                           if confined(root, path).is_file()}
-                prompt = review.prompt(review.section_sources(
-                    sources, plan['stages'].get(review.prior_stage, {}).get('deliverables', [])))
-                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
-            if qa is not None:
-                sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
-                           if confined(root, path).is_file()}
-                prompt = qa.prompt(sources)
-                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
-            if coder is not None:
-                sources = {path: source_read(path) for path in sorted(inputs)
-                           if confined(root, path).is_file()}
-                prompt = coder.prompt(sources, conf['writes'], conf.get('deliverables', []))
-                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
-            if raw_writer:
-                prompt = RawWritePrompt(prompt)
-                manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
-            cap, timeout = ledger.reserve(prompt, getattr(prompt, "system_prefix", SYSTEM_PREFIX))
-            if review is not None:
-                cap = min(cap, review.completion_cap)
-            if qa is not None:
-                cap = min(cap, qa.completion_cap)
-            if coder is not None:
-                cap = min(cap, coder.completion_cap)
-            store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
-                        'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
-                        'completion_cap': cap})
-            manifest["calls_dispatched"] = manifest.get("calls_dispatched", 0) + 1
-            try:
-                result = await engine.queue.request(prompt, cap, timeout)
-            except Exception:
-                manifest["usage_unknown_for_failed_request"] = True
-                raise
-            # Persist actual usage before the breaker, even if the server over-reports.
-            store.event('model_call_finished', {'task': task['id'], 'generation': task['generation'],
-                        'prompt_tokens': result.prompt_tokens, 'cached_tokens': result.cached_tokens,
-                        'completion_tokens': result.completion_tokens, 'fresh_tokens': result.fresh_tokens,
-                        'raw_action': result.text})
-            metered = store.meter(task, result.prompt_tokens, result.cached_tokens, result.completion_tokens)
-            ledger.charge(result)
-            if metered["budget_exceeded"]:
-                raise RuntimeError("circuit_breaker:board_attempt_budget")
-            if ledger.seconds >= ledger.budget['max_seconds']:
-                raise RuntimeError('circuit_breaker:wall_clock_after_call')
-            if coder is not None:
-                current = coder.current
+                progress = canonical({'checkpointed': sorted(set(checkpoints) - partial),
+                                      'missing_deliverables': [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial],
+                                      'partial_files_continue_appending': sorted(partial), 'handoff_path': handoff, 'evidence_path': evidence})
+                missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
+                context_task = dict(task)
+                context_task['brief'] = dict(task['brief']) | {
+                    'deliverables': missing,
+                    'already_checkpointed_do_not_repeat': sorted(set(checkpoints) - partial),
+                    'role_work_complete': not missing,
+                    'current_goal': ('Produce remaining deliverables only' if missing else
+                                     'The role work is ALREADY COMPLETE. Finish with summary and open_discrepancies.'),
+                }
+                prompt = engine._context(root, context_task, broker, last) + '\nSAVED RUN STATE:\n' + progress
+                prompt += ('\nEXECUTION RULE: The LAST TOOL OBSERVATION has ALREADY EXECUTED. '
+                           'Do not request that same read again. Use the returned content to do the next step. '
+                           'Files in checkpointed are already written; do not repeat those writes. '
+                           'Once all deliverables are checkpointed, finish with summary=<factual summary> and '
+                           'open_discrepancies=<list of actual gaps; [] only if none>. Runtime generates the handoff. '
+                           + ('Respond with ONE next action only.' if raw_writer else 'Respond with ONE next JSON action only.'))
+                if raw_writer:
+                    prompt += ('\nWRITE PROTOCOL: For writes and appends, use format=raw by default: first line JSON header without data, '
+                               'then an exact ---CONTENT--- line, then literal content through end-of-message. '
+                               'Do not stop at the header closing brace. JSON data is a small-content alternative. '
+                               'Read, command, finish and fail still use one JSON object.\n' + chunk_feedback)
+                missing = [p for p in conf.get('deliverables', []) if p not in checkpoints or p in partial]
+                commands = {cmd['capture']: name for name, cmd in conf.get('commands', {}).items()}
+                if missing:
+                    target = missing[0]
+                    next_step = ('Run named command ' + commands[target] if target in commands else
+                                 ('Continue ' + target + ' using action=append; final chunk more=false' if target in partial else
+                                  'Create ' + target + ' using action=write, path=' + target +
+                                  (', format=raw followed by separator and literal file text, more=<true if chunks remain>' if raw_writer else
+                                   ', data=<file text or first chunk>, more=<true if chunks remain>')))
+                elif handoff not in checkpoints:
+                    next_step = 'Emit action=finish with summary and open_discrepancies; runtime generates ' + handoff
+                else:
+                    next_step = 'All required outputs exist. Emit action=finish now; do not read or rewrite them.'
+                if manifest.get('calls_dispatched', 0) == 0 and plan['spec'] in task['brief']['permitted_reads']:
+                    next_step = 'Read ' + plan['spec'] + ' once to obtain the authoritative source before writing.'
+                if finish_feedback:
+                    next_step = finish_feedback
+                prompt += '\nSCHEDULER CURRENT STEP (not a new run): ' + next_step
+                prompt += '\nCompleted model calls across this stage task: ' + str(ledger.calls)
+                if last.startswith('{') and '"content":' in last:
+                    prompt += '\nThe read response above is already available. NOW perform the current write step, not another read.'
+                prompt += '\nCHUNK RULE: ' + chunk_feedback
+                if review is not None:
+                    # REVIEW owns progression; no action-loop instructions enter its prompt.
+                    sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
+                               if confined(root, path).is_file()}
+                    prompt = review.prompt(review.section_sources(
+                        sources, plan['stages'].get(review.prior_stage, {}).get('deliverables', [])))
+                    manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+                if qa is not None:
+                    sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
+                               if confined(root, path).is_file()}
+                    prompt = qa.prompt(sources)
+                    manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+                if coder is not None:
+                    sources = {path: source_read(path) for path in sorted(inputs)
+                               if confined(root, path).is_file()}
+                    prompt = coder.prompt(sources, conf['writes'], conf.get('deliverables', []))
+                    manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+                if raw_writer:
+                    prompt = RawWritePrompt(prompt)
+                    manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
+                cap, timeout = ledger.reserve(prompt, getattr(prompt, "system_prefix", SYSTEM_PREFIX))
+                if review is not None:
+                    cap = min(cap, review.completion_cap)
+                if qa is not None:
+                    cap = min(cap, qa.completion_cap)
+                if coder is not None:
+                    cap = min(cap, coder.completion_cap)
+                if task['stage'] in ('INTAKE', 'FIXER'):
+                    cap = min(cap, 4096)
+                store.event('model_call_started', {'task': task['id'], 'generation': task['generation'],
+                            'call': ledger.calls+1, 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest(),
+                            'completion_cap': cap})
+                manifest["calls_dispatched"] = manifest.get("calls_dispatched", 0) + 1
                 try:
-                    if current == 'plan':
-                        coder.accept_plan(result.text, conf['writes'],
-                            [p for p in conf.get('deliverables', [])
-                             if p not in {cmd['capture'] for cmd in conf.get('commands', {}).values()}])
-                    elif current == 'check':
-                        try:
-                            argv = coder.argv(result.text)
-                            name = next((n for n, cmd in conf.get('commands', {}).items()
-                                         if cmd['argv'] == argv), None)
-                            if name is None:
-                                raise PolicyError('command not on existing executor allowlist')
-                        except PolicyError as exc:
+                    result = await engine.queue.request(prompt, cap, timeout)
+                except Exception:
+                    manifest["usage_unknown_for_failed_request"] = True
+                    raise
+                # Persist actual usage before the breaker, even if the server over-reports.
+                store.event('model_call_finished', {'task': task['id'], 'generation': task['generation'],
+                            'prompt_tokens': result.prompt_tokens, 'cached_tokens': result.cached_tokens,
+                            'completion_tokens': result.completion_tokens, 'fresh_tokens': result.fresh_tokens,
+                            'raw_action': result.text})
+                metered = store.meter(task, result.prompt_tokens, result.cached_tokens, result.completion_tokens)
+                ledger.charge(result)
+                if metered["budget_exceeded"]:
+                    raise RuntimeError("circuit_breaker:board_attempt_budget")
+                if ledger.seconds >= ledger.budget['max_seconds']:
+                    raise RuntimeError('circuit_breaker:wall_clock_after_call')
+                if coder is not None:
+                    current = coder.current
+                    try:
+                        if current == 'plan':
+                            coder.accept_plan(result.text, conf['writes'],
+                                [p for p in conf.get('deliverables', [])
+                                 if p not in {cmd['capture'] for cmd in conf.get('commands', {}).values()}])
+                        elif current == 'check':
+                            try:
+                                argv = coder.argv(result.text)
+                                name = next((n for n, cmd in conf.get('commands', {}).items()
+                                             if cmd['argv'] == argv), None)
+                                if name is None:
+                                    raise PolicyError('command not on existing executor allowlist')
+                            except PolicyError as exc:
+                                coder.execution.append({'status': 'skipped', 'reason': str(exc)})
+                                coder.phase = 'done'
+                            else:
+                                coder.command = name
+                                receipt = await execute_command(name)
+                                output = json.loads(confined(root, receipt['capture']).read_text())
+                                coder.execution.append(output)
+                                coder.phase = 'done' if output['exit_code'] == 0 else 'repair'
+                        elif current == 'repair':
+                            path, sep, content = result.text.partition('\n')
+                            if path not in coder.bodies or not sep or not content.strip():
+                                raise PolicyError('repair requires accepted path line followed by content')
+                            coder.repair_path = path
+                            coder.phase = 'repair_body'
+                        else:
+                            path = coder.repair_path if current == 'repair_body' else current.removeprefix('file:')
+                            body = result.text
+                            if not body.strip() or '\x00' in body:
+                                raise PolicyError('file content must be nonempty text without NUL')
+                            chunks = storage_chunks(body)
+                            count = write_checkpoint(path, body, chunks=chunks)
+                            if len(chunks) > 1:
+                                store.event('oversized_accepted_split', {'task': task['id'],
+                                    'generation': task['generation'], 'op': 'write', 'path': path,
+                                    'bytes': len(body.encode()), 'chunk_count': len(chunks), 'chunk_limit': chunk_limit})
+                            coder.bodies[path] = body
+                            store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                                        'op': 'write', 'path_or_name': path,
+                                        'receipt': canonical({'written': path, 'bytes': count, 'sha256': checkpoints[path]})})
+                            if current == 'repair_body':
+                                receipt = await execute_command(coder.command)
+                                coder.execution.append(json.loads(confined(root, receipt['capture']).read_text()))
+                                coder.phase = 'done'
+                        coder.feedback = ''
+                    except (PolicyError, OSError, ValueError) as exc:
+                        store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': str(exc)})
+                        if current == 'check':
                             coder.execution.append({'status': 'skipped', 'reason': str(exc)})
                             coder.phase = 'done'
                         else:
-                            coder.command = name
-                            receipt = await execute_command(name)
-                            output = json.loads(confined(root, receipt['capture']).read_text())
-                            coder.execution.append(output)
-                            coder.phase = 'done' if output['exit_code'] == 0 else 'repair'
-                    elif current == 'repair':
-                        path, sep, content = result.text.partition('\n')
-                        if path not in coder.bodies or not sep or not content.strip():
-                            raise PolicyError('repair requires accepted path line followed by content')
-                        coder.repair_path = path
-                        coder.phase = 'repair_body'
-                    else:
-                        path = coder.repair_path if current == 'repair_body' else current.removeprefix('file:')
-                        body = result.text
-                        if not body.strip() or '\x00' in body:
-                            raise PolicyError('file content must be nonempty text without NUL')
-                        chunks = storage_chunks(body)
-                        count = write_checkpoint(path, body, chunks=chunks)
-                        if len(chunks) > 1:
-                            store.event('oversized_accepted_split', {'task': task['id'],
-                                'generation': task['generation'], 'op': 'write', 'path': path,
-                                'bytes': len(body.encode()), 'chunk_count': len(chunks), 'chunk_limit': chunk_limit})
-                        coder.bodies[path] = body
-                        store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
-                                    'op': 'write', 'path_or_name': path,
-                                    'receipt': canonical({'written': path, 'bytes': count, 'sha256': checkpoints[path]})})
-                        if current == 'repair_body':
-                            receipt = await execute_command(coder.command)
-                            coder.execution.append(json.loads(confined(root, receipt['capture']).read_text()))
-                            coder.phase = 'done'
-                    coder.feedback = ''
-                except (PolicyError, OSError, ValueError) as exc:
-                    store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': str(exc)})
-                    if current == 'check':
-                        coder.execution.append({'status': 'skipped', 'reason': str(exc)})
-                        coder.phase = 'done'
-                    else:
-                        coder.reject(str(exc))
-                if coder.current == 'files':
-                    coder.phase = 'check'
-                store.save_coder_progress(task, input_hash, coder.progress())
-                if coder.current == 'check' and coder.unwritable:
-                    raise RuntimeError('coder_action_format_exhausted:unwritable; ' + canonical(coder.unwritable))
-                if coder.current != 'done':
-                    continue
-                trusted_write(evidence, confined(root, evidence).read_bytes() +
-                              (canonical({'event': 'coder_self_check', 'results': coder.execution}) + '\n').encode())
-                action = coder.finish()
-            elif qa is not None:
-                try:
-                    action = qa.accept(result.text)
-                except PolicyError as exc:
-                    last = str(exc)
-                    store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
-                    qa.reject(last)
-                    action = None
-                store.save_qa_progress(task, input_hash, qa.progress())
-                if action is None:
-                    continue
-            elif review is not None:
-                section = review.current
-                try:
-                    action = review.accept(result.text)
-                except PolicyError as exc:
-                    last = str(exc)
-                    store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
-                    review.reject(last)
+                            coder.reject(str(exc))
+                    if coder.current == 'files':
+                        coder.phase = 'check'
+                    store.save_coder_progress(task, input_hash, coder.progress())
+                    if coder.current == 'check' and coder.unwritable:
+                        raise RuntimeError('coder_action_format_exhausted:unwritable; ' + canonical(coder.unwritable))
+                    if coder.current != 'done':
+                        continue
+                    trusted_write(evidence, confined(root, evidence).read_bytes() +
+                                  (canonical({'event': 'coder_self_check', 'results': coder.execution}) + '\n').encode())
+                    action = coder.finish()
+                elif qa is not None:
+                    try:
+                        action = qa.accept(result.text)
+                    except PolicyError as exc:
+                        last = str(exc)
+                        store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
+                        qa.reject(last)
+                        action = None
+                    store.save_qa_progress(task, input_hash, qa.progress())
+                    if action is None:
+                        continue
+                elif review is not None:
+                    section = review.current
+                    try:
+                        action = review.accept(result.text)
+                    except PolicyError as exc:
+                        last = str(exc)
+                        store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
+                        review.reject(last)
+                        store.save_review_progress(task, input_hash, review.progress())
+                        continue
                     store.save_review_progress(task, input_hash, review.progress())
-                    continue
-                store.save_review_progress(task, input_hash, review.progress())
-                last = canonical({'accepted_sections': list(review.sections),
-                                  'accepted_this_write': [section] if section != 'verdict' else [],
-                                  'missing_sections': review.missing})
-                store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
-                            'op': 'write', 'path_or_name': conf['deliverables'][0], 'receipt': last})
-                if action is None:
-                    continue
-                write_checkpoint(conf['deliverables'][0], canonical(review.document()) + '\n')
-            else:
-                first = ''
-                try:
-                    decoder = json.JSONDecoder()
-                    header, end = decoder.raw_decode(result.text.lstrip())
-                    is_raw = isinstance(header, dict) and header.get('format') == 'raw'
-                    first = result.text if is_raw else result.text.lstrip()[:end]
-                    if not is_raw and result.text.lstrip()[end:].strip():
-                        store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
-                                    'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
-                    action = parse_action(first)
-                    if action['action'] not in ('write', 'append') and len(first.encode('utf-8')) > chunk_limit:
-                        raise ModelError('encoded action exceeds chunk limit')
-                except (ModelError, ValueError) as exc:
-                    # A bounded correction is fresh, not replay of malformed history.
-                    last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
-                            + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
-                    action_format_errors += 1
-                    template = (intake_template(conf['deliverables'][0]) if task['stage'] == 'INTAKE' else
-                                canonical({'action': 'write', 'path': (conf.get('deliverables') or ['output.txt'])[0],
-                                           'data': 'Small complete file or first chunk', 'more': True}))
-                    if raw_writer:
-                        template = raw_template((conf.get('deliverables') or ['output.txt'])[0])
-                        last = last.replace('exactly one JSON action; JSON documents may use object-valued data.',
-                                            'exactly one action; use the raw write template for file content.')
-                    last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
-                    if action_format_errors >= 3:
-                        raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized non-write actions; template: ' + template)
-                    repeat += 1
-                    if repeat >= 3:
-                        raise RuntimeError('error:no_progress:invalid_actions')
-                    continue
+                    last = canonical({'accepted_sections': list(review.sections),
+                                      'accepted_this_write': [section] if section != 'verdict' else [],
+                                      'missing_sections': review.missing})
+                    store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
+                                'op': 'write', 'path_or_name': conf['deliverables'][0], 'receipt': last})
+                    if action is None:
+                        continue
+                    write_checkpoint(conf['deliverables'][0], canonical(review.document()) + '\n')
+                else:
+                    first = ''
+                    try:
+                        decoder = json.JSONDecoder()
+                        header, end = decoder.raw_decode(result.text.lstrip())
+                        is_raw = isinstance(header, dict) and header.get('format') == 'raw'
+                        first = result.text if is_raw else result.text.lstrip()[:end]
+                        if not is_raw and result.text.lstrip()[end:].strip():
+                            store.event('additional_actions_discarded', {'task': task['id'], 'call': ledger.calls,
+                                        'reason': 'only first JSON object is eligible; no speculative follow-up executes'})
+                        action = parse_action(first)
+                        if action['action'] not in ('write', 'append') and len(first.encode('utf-8')) > chunk_limit:
+                            raise ModelError('encoded action exceeds chunk limit')
+                    except (ModelError, ValueError) as exc:
+                        # A bounded correction is fresh, not replay of malformed history.
+                        last = ('PROTOCOL_ERROR: ' + str(exc) + '. Respond with exactly one JSON action; JSON documents may use object-valued data.\n'
+                                + 'LAST SUCCESSFUL TOOL OBSERVATION (still authoritative):\n' + last_observation)
+                        action_format_errors += 1
+                        template = (intake_template(conf['deliverables'][0]) if task['stage'] == 'INTAKE' else
+                                    canonical({'action': 'write', 'path': (conf.get('deliverables') or ['output.txt'])[0],
+                                               'data': 'Small complete file or first chunk', 'more': True}))
+                        if raw_writer:
+                            template = raw_template((conf.get('deliverables') or ['output.txt'])[0])
+                            last = last.replace('exactly one JSON action; JSON documents may use object-valued data.',
+                                                'exactly one action; use the raw write template for file content.')
+                        last = 'Action template: ' + template + '\n' + chunk_feedback + '\n' + last
+                        if action_format_errors >= 3:
+                            raise RuntimeError(task['stage'].lower() + '_action_format_exhausted:three invalid or oversized non-write actions; template: ' + template)
+                        repeat += 1
+                        if repeat >= 3:
+                            raise RuntimeError('error:no_progress:invalid_actions')
+                        continue
             op = action['action']
             signature = canonical(action)
             repeat = repeat + 1 if signature == previous else 0

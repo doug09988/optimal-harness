@@ -25,6 +25,131 @@ class RuntimeTests(unittest.TestCase):
 
     def submit(self): self.engine.submit(self.root,self.plan,self.grader/'acceptance.json')
 
+    def integration_setup(self):
+        for path, body in [('wordfreq.py', '# implementation\n'), ('test_unit.py', '# tests\n')]:
+            (self.root/path).write_text(body)
+
+    def test_driven_integrator_layout_notes_and_failed_check_evidence(self):
+        from unittest.mock import patch
+        self.integration_setup()
+        notes = 'Integration notes with exact whitespace.  \n\n'
+        output = {'exit_code': 1, 'reason': 'exited', 'stdout': 'failure evidence', 'stderr': 'bad test'}
+        def reply(prompt):
+            self.assertIn('PACKAGE MANIFEST:', prompt)
+            self.assertIn('wordfreq.py', prompt)
+            self.assertIn('CODER HANDOFF:', prompt)
+            self.assertNotIn('Respond with ONE next JSON action', prompt)
+            return notes
+        with patch('optimal_harness.runtime.sandbox_command', return_value=output) as execute:
+            task = self.run_coder([reply], role='INTEGRATOR')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 1)
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual((self.root/'artifacts/integration_notes.md').read_bytes(), notes.encode())
+        self.assertEqual(json.loads((self.root/'reports/integration.json').read_text()), output)
+        handoff = json.loads(next(self.root.glob('vault/runs/*/a1/handoff.json')).read_text())
+        self.assertEqual(handoff['deliverables'], ['artifacts/integration_notes.md', 'reports/integration.json'])
+        self.assertEqual((self.root/'wordfreq.py').read_text(), '# implementation\n')
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute("SELECT payload FROM events WHERE kind='tool_action'")]
+        self.assertTrue(any('failure evidence' in e['receipt'] for e in events if e['op'] == 'command'))
+
+    def test_driven_integrator_notes_reask_and_model_error(self):
+        from optimal_harness.runtime import model_side_failure
+        self.integration_setup()
+        task = self.run_coder(['', '{"action":"finish"}'], role='INTEGRATOR')
+        self.assertIn('integrator_action_format_exhausted:notes', task['failure'])
+        self.assertTrue(model_side_failure(task['failure']))
+        self.assertEqual(self.engine.queue.calls, 2)
+        self.assertFalse((self.root/'artifacts/integration_notes.md').exists())
+
+    def test_remaining_loop_caps(self):
+        for role in ('INTAKE', 'FIXER'):
+            with self.subTest(role=role):
+                if role == 'FIXER':
+                    self.setUp()
+                self.run_coder([{'action': 'fail', 'reason': 'scripted stop'}], role=role)
+                self.assertEqual(self.observed_caps, [4096])
+
+    def integrator_attempts(self, change=False, after_notes=False, after_check=False):
+        from optimal_harness.engine import make_brief
+        from unittest.mock import patch
+        self.integration_setup()
+        self.submit()
+        self.store.finish(self.store.claim('setup', 60), 'SUCCEEDED')
+        self.store.enqueue('wordcounter', 'INTEGRATOR', 0,
+                           make_brief('INTEGRATOR', self.store.project('wordcounter')['plan']))
+        calls = []
+        class Queue(FakeQueue):
+            async def request(q, prompt, cap, timeout):
+                calls.append((str(prompt), cap))
+                value = q.actions.popleft()
+                if isinstance(value, Exception):
+                    raise value
+                return Completion(value, 100, 80, 30)
+        output = {'exit_code': 0, 'reason': 'exited', 'stdout': 'integrated', 'stderr': ''}
+        original_save = self.store.save_integrator_progress
+        def save(task, key, state):
+            original_save(task, key, state)
+            if ((after_notes and state['notes'] is not None and not state['execution']) or
+                    (after_check and state['execution'])):
+                raise RuntimeError('model_request_killed_on_deadline')
+        first = self.store.claim('first', 60)
+        self.engine.queue = Queue(['saved notes' if after_notes or after_check else RuntimeError('model_request_killed_on_deadline')])
+        with patch.object(self.engine, '_advance'), patch('optimal_harness.runtime.sandbox_command', return_value=output) as execute:
+            with patch.object(self.store, 'save_integrator_progress', side_effect=save):
+                asyncio.run(self.engine.run_task(first))
+            self.assertEqual(self.store.tasks('wordcounter')[-1]['status'], 'QUEUED')
+            with self.store.transaction() as c:
+                progress = json.loads(c.execute('SELECT body FROM integrator_progress').fetchone()[0])
+            self.assertIsNotNone(progress['assembly'])
+            if change:
+                (self.root/'wordfreq.py').write_text('# changed implementation\n')
+            self.engine.store = Store(self.base/'board.db')
+            self.engine.queue = Queue(['fresh notes'] if change or not (after_notes or after_check) else [])
+            asyncio.run(self.engine.run_task(self.engine.store.claim('second', 60)))
+            task = self.engine.store.tasks('wordcounter')[-1]
+            self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+            self.assertEqual(execute.call_count, 1)
+        return calls
+
+    def test_integrator_resume_after_assembly_only_notes_outstanding(self):
+        calls = self.integrator_attempts()
+        self.assertEqual([cap for _, cap in calls], [2048, 2048])
+        self.assertEqual(calls[0][0], calls[1][0])
+
+    def test_integrator_resume_keeps_notes_without_another_call(self):
+        self.assertEqual(len(self.integrator_attempts(after_notes=True)), 1)
+        self.assertEqual((self.root/'artifacts/integration_notes.md').read_text(), 'saved notes')
+
+    def test_integrator_resume_restores_check_without_rerunning(self):
+        calls = self.integrator_attempts(after_check=True)
+        self.assertEqual(len(calls), 1)
+        self.assertIn('integrated', (self.root/'reports/integration.json').read_text())
+        owned = list(self.root.glob('vault/runs/*/a2/commands/suite.json'))
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0].read_bytes(), (self.root/'reports/integration.json').read_bytes())
+
+    def test_integrator_preserves_declared_wiring_deliverable(self):
+        from unittest.mock import patch
+        self.integration_setup()
+        self.plan['wiring_paths'] = ['test_unit.py']
+        self.plan['stages']['INTEGRATOR']['writes'].append('test_unit.py')
+        self.plan['stages']['INTEGRATOR']['deliverables'].append('test_unit.py')
+        output = {'exit_code': 0, 'reason': 'exited', 'stdout': '', 'stderr': ''}
+        with patch('optimal_harness.runtime.sandbox_command', return_value=output):
+            task = self.run_coder(['Package wiring retained.'], role='INTEGRATOR')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'test_unit.py').read_bytes(), b'# tests\n')
+        handoff = json.loads(next(self.root.glob('vault/runs/*/a1/handoff.json')).read_text())
+        self.assertEqual(handoff['deliverables'], self.plan['stages']['INTEGRATOR']['deliverables'])
+
+    def test_integrator_changed_input_discards_assembly_and_notes(self):
+        calls = self.integrator_attempts(change=True, after_notes=True)
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0][0], calls[1][0])
+        self.assertEqual((self.root/'artifacts/integration_notes.md').read_text(), 'fresh notes')
+
     def test_speculative_second_action_never_executes(self):
         class Queue(FakeQueue):
             async def request(self,*args):
@@ -49,8 +174,10 @@ class RuntimeTests(unittest.TestCase):
         task = self.store.claim('worker', 60)
         task['stage'] = role
         task['brief'] = make_brief(role, self.store.project('wordcounter')['plan'], source_stage=prior_stage)
+        self.observed_caps = []
         class Queue(FakeQueue):
             async def request(q, prompt, *args):
+                self.observed_caps.append(args[0])
                 q.calls += 1
                 value = q.actions.popleft()
                 if callable(value):
@@ -62,7 +189,7 @@ class RuntimeTests(unittest.TestCase):
         return self.store.tasks('wordcounter')[0]
 
     def test_all_writing_roles_bound_invalid_actions(self):
-        for role in ('INTAKE', 'INTEGRATOR', 'REVIEW', 'FIXER'):
+        for role in ('INTAKE', 'REVIEW', 'FIXER'):
             with self.subTest(role=role):
                 # Each case needs a separate project/store.
                 if role != 'INTAKE':

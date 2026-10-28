@@ -245,8 +245,7 @@ class HarnessTest(unittest.TestCase):
             "import sys\nprint('placeholder only in mocked test')\n",
             "import unittest\n", '["disallowed"]',
             *review("CODER"),
-            write("artifacts/integration_notes.md", "Wiring inspected."),
-            {"action": "command", "name": "suite"}, handoff, finish,
+            "Wiring inspected.",
             *review("INTEGRATOR"),
             "test_acceptance", "def test_acceptance(self):\n    self.assertTrue(True)", "PASS",
             *review("QA"),
@@ -264,7 +263,7 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(self.store.project("wordcounter")["status"], "AWAITING_COORDINATOR")
         self.assertEqual(len(self.store.tasks("wordcounter")), 8)
         self.assertTrue(all(t["status"] == "SUCCEEDED" for t in self.store.tasks("wordcounter")))
-        self.assertEqual(queue.calls, 34)
+        self.assertEqual(queue.calls, 31)
         self.assertTrue(self.store.audit()["valid"])
         with patch("optimal_harness.verifier.sandbox_command", side_effect=mocked_sandbox):
             engine.coordinator_verdict("wordcounter", True, "Ground truth graded independently; accepted.")

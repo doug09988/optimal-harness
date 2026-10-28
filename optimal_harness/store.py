@@ -67,6 +67,10 @@ class Store:
                     project TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL,
                     body TEXT NOT NULL, PRIMARY KEY(project,stage)
                 );
+                CREATE TABLE IF NOT EXISTS integrator_progress (
+                    project TEXT NOT NULL, stage TEXT NOT NULL, input_hash TEXT NOT NULL,
+                    body TEXT NOT NULL, PRIMARY KEY(project,stage)
+                );
                 CREATE TABLE IF NOT EXISTS handoffs (
                     task TEXT NOT NULL, generation INTEGER NOT NULL, body TEXT NOT NULL,
                     PRIMARY KEY(task,generation)
@@ -272,6 +276,23 @@ class Store:
     def save_coder_progress(self, task, input_hash, body):
         def effect(c):
             c.execute('INSERT OR REPLACE INTO coder_progress VALUES(?,?,?,?)',
+                      (task['project_id'], task['stage'], input_hash, canonical(body)))
+        self.commit(task, effect)
+
+    def load_integrator_progress(self, task, input_hash):
+        with self.transaction() as c:
+            self._assert(c, task)
+            row = c.execute('SELECT * FROM integrator_progress WHERE project=? AND stage=?',
+                            (task['project_id'], task['stage'])).fetchone()
+            if row and row['input_hash'] == input_hash:
+                return json.loads(row['body'])
+            c.execute('DELETE FROM integrator_progress WHERE project=? AND stage=?',
+                      (task['project_id'], task['stage']))
+            return None
+
+    def save_integrator_progress(self, task, input_hash, body):
+        def effect(c):
+            c.execute('INSERT OR REPLACE INTO integrator_progress VALUES(?,?,?,?)',
                       (task['project_id'], task['stage'], input_hash, canonical(body)))
         self.commit(task, effect)
 
