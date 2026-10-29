@@ -200,6 +200,29 @@ async def run_task(engine, task):
                             'first_line': candidate.decode('utf-8').splitlines()[0][:80]
                             if candidate.splitlines() else ''})
                 raise PolicyError(reason) from exc
+        if (data is not None and task['stage'] in ('CODER', 'FIXER')
+                and path in plan.get('implementation_paths', [])
+                and path not in set(plan.get('qa_test_paths', [])) | set(plan.get('unit_test_paths', []))
+                and not Path(path).name.startswith('test_') and plan.get('probes')):
+            from .probes import run_probes
+            store.assert_lease(task)
+            target = confined(root, path)
+            old = target.read_bytes() if append and target.is_file() else b''
+            candidate = old + data.encode('utf-8')
+            if len(candidate) > broker.max_bytes:
+                raise PolicyError(f'write total file size exceeds file limit of {broker.max_bytes} UTF-8 bytes')
+            failures = run_probes(root, plan, ledger, store, task, candidates={path: candidate})
+            if failures:
+                failure = failures[0]
+                reason = 'probe_failed:' + failure['name']
+                store.event('write_rejected', {'task': task['id'],
+                            'generation': task['generation'], 'path': path,
+                            'error_line': None, 'reason': reason,
+                            'expected': failure['expected'], 'actual': failure['actual'],
+                            'first_line': candidate.decode('utf-8').splitlines()[0][:80]
+                            if candidate.splitlines() else ''})
+                raise PolicyError(reason + '\nexpected: ' + canonical(failure['expected'])
+                                  + '\nactual: ' + canonical(failure['actual']))
         def effect(c):
             count = None
             if data is not None:

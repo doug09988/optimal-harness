@@ -223,6 +223,7 @@ class HarnessTest(unittest.TestCase):
         self.assertTrue(all(r.fresh_tokens == 20 and r.cached_tokens == 30 for r in replies))
 
     def test_full_stage_chain_then_external_coordinator_approval(self):
+        self.plan.pop('probes', None)  # This legacy fixture intentionally publishes a probe-failing implementation.
         lines = [ln for ln in (self.root / "spec.md").read_text().splitlines() if ":" in ln]
         audit = {"slots": {name: {"status": "citation", "quote": line, "because": "Explicit rule."}
                            for name, line in zip(LIFECYCLE, lines)}}

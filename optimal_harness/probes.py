@@ -6,7 +6,8 @@ import tempfile
 from .policy import confined, sandbox_command, PolicyError
 
 
-def run_probes(root, plan, ledger, store, task):
+def run_probes(root, plan, ledger, store, task, *, candidates=None):
+    # Candidate bytes override only the scratch copy; project files stay untouched.
     # Project CLI convention: first implementation path takes INPUT.json OUTPUT.json.
     failures = []
     for probe in plan.get('probes', []):
@@ -20,7 +21,11 @@ def run_probes(root, plan, ledger, store, task):
                 paths = plan['implementation_paths']
                 for path in paths:
                     source = confined(root, path)
-                    if source.is_file():
+                    if candidates is not None and path in candidates:
+                        dest = confined(scratch, path)
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes(candidates[path])
+                    elif source.is_file():
                         dest = confined(scratch, path)
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_bytes(source.read_bytes())

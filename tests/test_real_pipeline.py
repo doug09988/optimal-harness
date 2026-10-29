@@ -68,6 +68,8 @@ class RealPipeline(unittest.TestCase):
             example=BASE/'examples'/'word-counter'
             shutil.copytree(example/'work',root); shutil.copytree(example/'grader',grader)
             plan=json.loads((example/'plan.json').read_text())
+            if not deferred:
+                plan.pop('probes', None)  # This fixture tests hidden failures beyond probe-free writes.
             if deferred:
                 plan['stages']['FIXER']['deliverables'] = []
             lines=[ln for ln in (root/'spec.md').read_text().splitlines() if ':' in ln]

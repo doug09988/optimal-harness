@@ -1,0 +1,88 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "03774770c56e4168",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "03774770c56e4168",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "error:no_progress:repeated_action",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"bytes\":2500,\"more\":false,\"sha256\":\"27c1c8f7856f533f67c17366107496775f4f7b0c1c2b1a781dc6e35b2a70b145\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 2,
+            "last_context": "{\"bytes\":2558,\"more\":false,\"sha256\":\"4e674d7a113732672c43eca6c62d11c16f4afb2b59a92c1ac3b07b057e6d0e26\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 3,
+            "last_context": "{\"bytes\":2500,\"more\":false,\"sha256\":\"27c1c8f7856f533f67c17366107496775f4f7b0c1c2b1a781dc6e35b2a70b145\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+            "reason": "error:no_progress:repeated_action"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"bytes\":2500,\"more\":false,\"sha256\":\"27c1c8f7856f533f67c17366107496775f4f7b0c1c2b1a781dc6e35b2a70b145\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 2,
+          "last_context": "{\"bytes\":2558,\"more\":false,\"sha256\":\"4e674d7a113732672c43eca6c62d11c16f4afb2b59a92c1ac3b07b057e6d0e26\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 3,
+          "last_context": "{\"bytes\":2500,\"more\":false,\"sha256\":\"27c1c8f7856f533f67c17366107496775f4f7b0c1c2b1a781dc6e35b2a70b145\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+          "reason": "error:no_progress:repeated_action"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 124,
+    "head": "0c2ef552f17e20f2c3b413bdf7fdba152856ebbf9d106978551a7d90a275c10b"
+  },
+  "integrity_errors": []
+}
