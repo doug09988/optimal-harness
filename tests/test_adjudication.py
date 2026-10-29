@@ -50,7 +50,7 @@ class AdjudicationTests(unittest.TestCase):
             self.responses.append(json.loads(prompt))
             return Completion(self.reply.pop(0) if isinstance(self.reply, list) else self.reply, 10, 0, 5)
         self.engine = SimpleNamespace(store=self.store, queue=SimpleNamespace(request=request))
-        self.reply = json.dumps(dict(verdict='TEST_WRONG', violator='test', clause='ascending Unicode code-point order',
+        self.reply = json.dumps(dict(violator='test', clause='ascending Unicode code-point order',
                                     derivation='Latin z precedes Greek alpha by code point.'))
 
     def gate(self, cycle, names=('test_order (test_public.Tests.test_order)',)):
@@ -110,87 +110,75 @@ class AdjudicationTests(unittest.TestCase):
         self.assertFalse(a.quarantines(self.store, 'p'))
         self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], 'ARTIFACT_WRONG')
 
-    def test_mismatch_retries_once_and_coherent_retry_lands(self):
-        for decision, wrong, right in (('TEST_WRONG', 'artifact', 'test'),
-                                       ('ARTIFACT_WRONG', 'test', 'artifact')):
-            with self.subTest(decision=decision):
+    def test_single_field_precedence_and_legacy_fallback(self):
+        cases = [
+            ({'violator': v}, d) for v, d in
+            (('test', 'TEST_WRONG'), ('artifact', 'ARTIFACT_WRONG'), ('uncertain', 'UNCERTAIN'))]
+        cases += [({'violator': v, 'verdict': 'TEST_WRONG' if v != 'test' else 'ARTIFACT_WRONG',
+                    'violation': 'implementation'}, d) for v, d in
+                  (('test', 'TEST_WRONG'), ('artifact', 'ARTIFACT_WRONG'), ('uncertain', 'UNCERTAIN'))]
+        cases += [({'violation': v, 'verdict': 'UNCERTAIN'}, d) for v, d in
+                  (('test', 'TEST_WRONG'), ('test_order', 'TEST_WRONG'),
+                   ('artifact', 'ARTIFACT_WRONG'), ('implementation', 'ARTIFACT_WRONG'),
+                   ('uncertain', 'UNCERTAIN'))]
+        cases += [({'verdict': d}, d) for d in ('TEST_WRONG', 'ARTIFACT_WRONG', 'UNCERTAIN')]
+        cases += [({'violator': [], 'violation': 'test_order'}, 'TEST_WRONG'),
+                  ({'violator': 'invalid', 'violation': {}, 'verdict': 'ARTIFACT_WRONG'}, 'ARTIFACT_WRONG')]
+        for fields, decision in cases:
+            with self.subTest(fields=fields):
                 self.store.events.clear()
                 self.responses.clear()
                 self.gate(1)
                 self.gate(2)
-                response = json.loads(self.reply) if isinstance(self.reply, str) else {}
-                response.update(verdict=decision, clause='ascending Unicode code-point order', derivation='Wrong order.')
-                self.reply = [json.dumps(dict(response, violator=wrong)),
-                              json.dumps(dict(response, violator=right))]
+                self.reply = json.dumps(dict(clause='ascending Unicode code-point order',
+                                            derivation='Wrong order.', **fields))
                 ledger = self.run_review()
-                self.assertEqual((ledger.calls, len(self.responses)), (2, 2))
-                self.assertIn('requires violator=' + right, self.responses[1]['retry_reason'])
+                self.assertEqual(ledger.calls, 1)
+                self.assertEqual(len(self.responses), 1)
                 self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], decision)
                 self.assertEqual(bool(a.quarantines(self.store, 'p')), decision == 'TEST_WRONG')
                 self.assertFalse(a.history(self.store, 'p', 'test_adjudication_incoherent'))
-                self.run_review()
-                self.assertEqual(len(self.responses), 2)
 
-    def test_persistent_mismatch_or_missing_preserves_later_eligibility(self):
-        for second in ({'verdict': 'ARTIFACT_WRONG', 'violator': 'test'},
-                       {'verdict': 'TEST_WRONG'}, {}):
-            with self.subTest(second=second):
+    def test_malformed_and_uncertain_preserve_later_eligibility(self):
+        for reply in ('not JSON', '[]', 'null', '{}', '{"violator": []}',
+                      '{"violation": {}}', '{"verdict": "invalid"}',
+                      '{"violator": "uncertain"}', '{"violator": "test"}',
+                      '{"violator":"test","clause":"invented","derivation":"wrong"}',
+                      '{"violator":"test","clause":"Sort","derivation":"two\\nlines"}'):
+            with self.subTest(reply=reply):
                 self.store.events.clear()
                 self.responses.clear()
                 self.task['cycle'] = 3
                 self.gate(1)
                 self.gate(2)
-                self.reply = [json.dumps(dict(verdict='TEST_WRONG', violator='artifact')), json.dumps(second)]
+                self.reply = reply
                 self.run_review()
-                self.assertFalse(a.quarantines(self.store, 'p'))
-                event = a.history(self.store, 'p', 'test_adjudication_incoherent')[-1]
-                self.assertEqual(len(event['attempts']), 2)
+                self.run_review()
+                self.assertEqual(len(self.responses), 1)
                 self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], 'UNCERTAIN')
-                self.run_review()
-                self.assertEqual(len(self.responses), 2)
                 self.gate(3)
                 self.task['cycle'] = 4
-                self.reply = json.dumps(dict(verdict='ARTIFACT_WRONG', violator='artifact'))
+                self.reply = json.dumps(dict(violator='artifact'))
                 self.run_review()
-                self.assertEqual(len(self.responses), 3)
+                self.assertEqual(len(self.responses), 2)
                 self.gate(4)
                 self.task['cycle'] = 5
                 self.run_review()
-                self.assertEqual(len(self.responses), 3)
+                self.assertEqual(len(self.responses), 2)
 
-    def test_missing_violator_retries_and_coherent_retry_quarantines(self):
-        self.gate(1)
-        self.gate(2)
-        coherent = self.reply
-        missing = json.loads(coherent)
-        del missing['violator']
-        self.reply = [json.dumps(missing), coherent]
-        self.run_review()
-        self.assertEqual(len(self.responses), 2)
-        self.assertEqual(len(a.quarantines(self.store, 'p')), 1)
-
-    def test_incoherent_retries_keep_three_candidate_cycle_cap(self):
+    def test_uncertain_keeps_three_candidate_cycle_cap(self):
         names = tuple('test_%d (test_public.Tests.test_%d)' % (i, i) for i in range(5))
         self.gate(1, names)
         self.gate(2, names)
-        self.reply = json.dumps(dict(verdict='ARTIFACT_WRONG', violator='test'))
+        self.reply = '{}'
         ledger = self.run_review()
-        self.assertEqual((ledger.calls, self.store.charges), (6, 6))
-        self.assertEqual(len(a.history(self.store, 'p', 'test_adjudication_started')), 3)
+        self.assertEqual((ledger.calls, self.store.charges), (3, 3))
         self.run_review()
-        self.assertEqual(len(self.responses), 6)
-        self.assertFalse(a.quarantines(self.store, 'p'))
+        self.assertEqual(len(self.responses), 3)
 
-    def test_malformed_response_retains_stage33_once_semantics(self):
-        self.gate(1)
-        self.gate(2)
-        self.reply = 'not JSON'
-        self.run_review()
-        self.gate(3)
-        self.task['cycle'] = 4
-        self.run_review()
-        self.assertEqual(len(self.responses), 1)
-        self.assertFalse(a.history(self.store, 'p', 'test_adjudication_incoherent'))
+    def test_prompt_requests_only_single_judgment(self):
+        self.assertIn('violator (test, artifact, or uncertain', a.AdjudicationPrompt.system_prefix)
+        self.assertNotIn('verdict', a.AdjudicationPrompt.system_prefix)
 
     def test_nonconsecutive_and_wrong_next_cycle(self):
         for cycles in ((0, 2), (0, 1)):
@@ -319,3 +307,25 @@ class AdjudicationTests(unittest.TestCase):
         store.event('test_quarantined', dict(project='other', suite='suite.json', test='test_order'))
         store.event('test_quarantined', dict(project='p', suite='suite.json', test='test_other'))
         self.assertEqual([q['test'] for q in a.quarantines(store, 'p')], ['test_other'])
+
+    def test_verify40_live_payloads_quarantine(self):
+        spec = ('Output shape/order: Write UTF-8 JSON containing an array of objects with exactly '
+                '`word` and `count` keys, one object per distinct word, in the specified sort order.')
+        (self.root / 'SPEC').write_text(spec)
+        payloads = [
+            '{\n  "verdict": "TEST_WRONG",\n  "violation": "test_single_word_case_sensitive_output",\n  "clause": "Output shape/order: Write UTF-8 JSON containing an array of objects with exactly `word` and `count` keys, one object per distinct word, in the specified sort order.",\n  "derivation": "The test incorrectly attempts to access output_data[0] with a tuple (\'count\', 1) instead of a string key, indicating the test expects a tuple as a key rather than a string key, which contradicts the SPEC\'s requirement for `word` and `count` keys to be strings."\n}',
+            '{\n  "verdict": "TEST_WRONG",\n  "violation": "test_single_word_case_sensitive_output",\n  "clause": "Output shape/order: Write UTF-8 JSON containing an array of objects with exactly `word` and `count` keys, one object per distinct word, in the specified sort order.",\n  "derivation": "The test incorrectly attempts to access output_data[0] as a tuple instead of a dictionary, which contradicts the SPEC\'s requirement that output should be an array of objects with `word` and `count` keys."\n}',
+            '{\n  "verdict": "TEST_WRONG",\n  "violation": "test_single_word_case_sensitive_output",\n  "clause": "Output shape/order: Write UTF-8 JSON containing an array of objects with exactly `word` and `count` keys, one object per distinct word, in the specified sort order.",\n "derivation": "The test incorrectly attempts to access output_data[0] with a tuple (\'count\', 1) instead of using the correct key access syntax output_data[0][\'count\']"\n}',
+        ]
+        for reply in payloads:
+            with self.subTest(reply=reply):
+                self.store.events.clear()
+                self.responses.clear()
+                name = 'test_single_word_case_sensitive_output (test_acceptance.AcceptanceTests)'
+                self.gate(1, (name,))
+                self.gate(2, (name,))
+                self.reply = reply
+                ledger = self.run_review()
+                self.assertEqual(ledger.calls, 1)
+                self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], 'TEST_WRONG')
+                self.assertEqual(len(a.quarantines(self.store, 'p')), 1)
