@@ -59,12 +59,18 @@ class RealPipeline(unittest.TestCase):
     def test_format_failure_retries_then_pipeline_completes(self):
         self.run_pipeline(True)
 
-    def run_pipeline(self, retry):
+    def test_deferred_coder_input_reaches_gate_and_fixer_then_full_package(self):
+        self.run_pipeline(False, deferred=True)
+
+    def run_pipeline(self, retry, deferred=False):
         with tempfile.TemporaryDirectory(dir=BASE/'runs') as tmp:
             base=Path(tmp); root=base/'work'; grader=base/'grader'
             example=BASE/'examples'/'word-counter'
             shutil.copytree(example/'work',root); shutil.copytree(example/'grader',grader)
             plan=json.loads((example/'plan.json').read_text())
+            if deferred:
+                plan['stages']['FIXER']['writes'].append('test_unit.py')
+                plan['stages']['FIXER']['deliverables'] = ['test_unit.py']
             lines=[ln for ln in (root/'spec.md').read_text().splitlines() if ':' in ln]
             audit={'slots':{name:{'status':'citation','quote':line,'because':'Explicit requirement.'} for name,line in zip(LIFECYCLE,lines)}}
             def write(path,data): return {'action':'write','path':path,'data':data}
@@ -78,6 +84,14 @@ class RealPipeline(unittest.TestCase):
                 return ['Real suite command follows.',*review('INTEGRATOR'),
                         'test_empty', QA_BODY, 'PASS\nEmpty input acceptance test passed.', *review('QA')]
             def fix(prompt):
+                if deferred:
+                    fixer = next(t for t in store.tasks('wordcounter') if t['stage'] == 'FIXER')
+                    changes = fixer['brief']['requested_changes']
+                    self.assertEqual(changes[0]['path'], 'test_unit.py')
+                    self.assertIn('SyntaxError:', changes[0]['change'])
+                    self.assertFalse((root/'test_unit.py').exists())
+                    self.assertIn('FILE: test_unit.py', prompt)
+                    return UNIT
                 self.assertIn('independent acceptance failed:',prompt)
                 return 'wordfreq.py :: correct case-sensitive counting'
             # Initial implementation intentionally lowercases strings: unit/QA happy
@@ -89,9 +103,18 @@ class RealPipeline(unittest.TestCase):
                 self.assertIn('intake_action_format_exhausted:', brief['attempt_failures'][0]['reason'])
                 self.assertIn('Action template:', brief['attempt_failures'][0]['last_context'])
                 return write('artifacts/intake.json', json.dumps(audit))
+            coder_bodies = [CODE, 'def broken(', 'def broken('] if deferred else [wrong, UNIT]
+            def rebuilt_notes(prompt):
+                self.assertEqual((root/'test_unit.py').read_text(), UNIT)
+                package = json.loads(prompt.split('PACKAGE MANIFEST:\n', 1)[1].split('\nCODER HANDOFF:', 1)[0])
+                self.assertIsNotNone(package['test_unit.py'])
+                return 'Rebuilt suite included in full package.'
+            second_integration = integration_and_qa()
+            if deferred:
+                second_integration[0] = rebuilt_notes
             actions=([{'action': 'invalid_' + str(i)} for i in range(3)] if retry else []) + [retry_intake if retry else write('artifacts/intake.json',json.dumps(audit)),handoff,finish,*review('INTAKE'),
-                     'wordfreq.py :: implementation\ntest_unit.py :: tests',wrong,UNIT,'["disallowed"]',*review('CODER'),
-                     *integration_and_qa(),fix,CODE,*review('FIXER'),*integration_and_qa()]
+                     'wordfreq.py :: implementation\ntest_unit.py :: tests',*coder_bodies,'["disallowed"]',*review('CODER'),
+                     *integration_and_qa(),fix,*([] if deferred else [CODE]),*review('FIXER'),*second_integration]
             store=Store(base/'board.db'); engine=Engine(store,FakeQueue(actions),lease_seconds=120)
             engine.submit(root,plan,grader/'acceptance.json')
             asyncio.run(engine.serve(1))
@@ -105,6 +128,18 @@ class RealPipeline(unittest.TestCase):
             with store.transaction() as c:
                 gates=[json.loads(r['payload']) for r in c.execute("SELECT payload FROM events WHERE kind='satisfiability_gate' ORDER BY seq")]
             self.assertEqual([g['report']['passed'] for g in gates],[False,True])
+            if deferred:
+                with store.transaction() as c:
+                    events = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='package_input_deferred'")]
+                    failed = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='deliverable_failed'")]
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]['path'], 'test_unit.py')
+                self.assertEqual(events[0]['error'], failed[0]['error'])
+                integrators = [t for t in tasks if t['stage'] == 'INTEGRATOR']
+                self.assertEqual(events[0]['task'], integrators[0]['id'])
+                self.assertTrue(all(t['status'] == 'SUCCEEDED' for t in integrators))
             self.assertEqual(engine.integrity_errors('wordcounter',root),[])
             engine.coordinator_verdict('wordcounter', True, 'Scripted sandbox verification only')
             self.assertEqual(store.project('wordcounter')['status'], 'DONE')

@@ -31,10 +31,14 @@ class DrivenIntegrator:
                              "ORDER BY t.rowid DESC, h.generation DESC LIMIT 1",
                              (task['project_id'],)).fetchall()
         coder_record = json.loads(rows[0]['body']) if rows else None
+        failed_inputs = {item['path']: item['error'] for item in
+                         (coder_record or {}).get('failed_deliverables', [])}
         coder_handoff = (json.loads(confined(root, coder_record['handoff']).read_text())
                          if coder_record else None)
         sources = {p: confined(root, p).read_bytes() if confined(root, p).is_file() else None
                    for p in sorted(inputs)}
+        deferred_inputs = {p for p in coder_paths
+                           if sources.get(p) is None and p in failed_inputs}
         package = {p: hashlib.sha256(body).hexdigest() if body is not None else None
                    for p, body in sources.items()}
         input_hash = hashlib.sha256(canonical({'files': package, 'handoff': coder_handoff,
@@ -48,7 +52,12 @@ class DrivenIntegrator:
             assembly = {}
             for path in coder_paths:
                 if sources.get(path) is None:
-                    raise RuntimeError('error:missing_deliverables:CODER package input:' + path)
+                    if path not in failed_inputs:
+                        raise RuntimeError('error:missing_deliverables:CODER package input:' + path)
+                    store.event('package_input_deferred', {
+                        'task': task['id'], 'generation': task['generation'],
+                        'path': path, 'error': failed_inputs[path],
+                        'coder_handoff': coder_record['handoff']})
             # Existing fixtures consume CODER files in place. Any additionally
             # declared wiring deliverable is collected at its exact path.
             for path in conf['deliverables']:
@@ -118,7 +127,9 @@ class DrivenIntegrator:
         # and its allowlist own argv, containment, captures, and checkpoints.
         for name, command in conf.get('commands', {}).items():
             if name not in state['execution']:
-                receipt = await execute(name)
+                # Stage only available inputs; the unchanged suite itself reports
+                # the missing module instead of aborting during command setup.
+                receipt = await execute(name, deferred_inputs=deferred_inputs)
                 state['execution'][name] = confined(root, receipt['capture']).read_text()
                 state['command_outputs'][name] = {
                     path: base64.b64encode(confined(root, path).read_bytes()).decode('ascii')

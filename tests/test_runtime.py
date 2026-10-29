@@ -64,6 +64,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.engine.queue.calls, 2)
         self.assertFalse((self.root/'artifacts/integration_notes.md').exists())
 
+    def test_integrator_missing_unmarked_coder_input_is_fatal(self):
+        (self.root/'wordfreq.py').write_text('# implementation\n')
+        task = self.run_coder([], role='INTEGRATOR')
+        self.assertIn('error:missing_deliverables:CODER package input:test_unit.py', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 0)
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute(
+                "SELECT count(*) FROM events WHERE kind='package_input_deferred'").fetchone()[0], 0)
+
     def test_remaining_loop_caps(self):
         for role in ('INTAKE', 'FIXER'):
             with self.subTest(role=role):

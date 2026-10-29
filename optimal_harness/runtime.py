@@ -230,8 +230,11 @@ async def run_task(engine, task):
             offset += len(text.encode('utf-8'))
         return ''.join(chunks)
 
-    async def execute_command(name):
+    async def execute_command(name, *, deferred_inputs=()):
         command = conf['commands'][name]
+        if task['stage'] == 'INTEGRATOR' and deferred_inputs:
+            command = dict(command, reads=[p for p in command.get('reads', [])
+                                          if p not in deferred_inputs])
         # Non-isolated commands are synchronous under lease fence: reclaimed
         # workers cannot commit staged outputs after another worker claims.
         def command_effect(c):
