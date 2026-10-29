@@ -215,6 +215,23 @@ class Engine:
                  for row in rows for item in json.loads(row['body']).get('failed_deliverables', [])]
         if items:
             brief['requested_changes'] = items
+        if plan.get('probes'):
+            with self.store.transaction() as c:
+                row = c.execute("SELECT id FROM tasks WHERE project_id=? AND stage IN ('CODER','FIXER') "
+                                "AND status='SUCCEEDED' ORDER BY rowid DESC LIMIT 1", (project,)).fetchone()
+                failures = [json.loads(r[0]) for r in c.execute(
+                    "SELECT payload FROM events WHERE kind='probe_failed' ORDER BY rowid")
+                    if row and json.loads(r[0]).get('task') == row['id']]
+            if row:
+                with self.store.transaction() as c:
+                    reports = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='fixer_feedback' ORDER BY rowid")
+                        if json.loads(r[0]).get('task') == row['id']]
+                if reports:
+                    failures = [f for f in reports[-1]['failures'] if 'expected' in f]
+            if failures:
+                brief['probe_failures'] = failures
+                brief['notes_verbatim'] += '\nGOLDEN PROBE FAILURES:\n' + canonical(failures)
         from .discrepancies import snapshot, live
         p = self.store.project(project)
         brief['discrepancy_closure'] = live(snapshot(self.store, project, Path(p['root']), plan))

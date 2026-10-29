@@ -138,6 +138,11 @@ class DrivenFixer:
                 def render(f, e, a):
                     return FixerPrompt(str(original(f, e, a)) + '\nDISCREPANCY CLOSURE — WORK ITEMS\n' +
                                        canonical(work_items))
+            if task['brief'].get('probe_failures'):
+                original_probe_render = render
+                def render(f, e, a):
+                    return FixerPrompt(str(original_probe_render(f, e, a)) +
+                        '\nGOLDEN PROBE FAILURES:\n' + canonical(task['brief']['probe_failures']))
             files, excerpts = source_groups(sources or {})
             excerpts.update(evidence or {})
             if 'failing_tests' in task['brief']:
@@ -277,10 +282,25 @@ class DrivenFixer:
         for index, (path, _) in enumerate(state['items']):
             if str(index) in state['applied']:
                 write(path)
+        from .probes import run_probes
+        pass_key = 'extra_probes_checked' if state.get('feedback_checked') else 'initial_probes_checked'
+        if plan.get('probes') and not state.get(pass_key):
+            probe_failures = run_probes(root, plan, ledger, store, task)
+            state[pass_key] = True
+            state['probe_failures'] = probe_failures
+            save()
+            if state.get('feedback_checked'):
+                store.event('fixer_feedback', dict(task=task['id'], project=task['project_id'],
+                    cycle=task['cycle'], status='failed' if probe_failures else 'passed',
+                    failures=probe_failures, failure_count=len(probe_failures), source='probes', pass_kind='extra'))
         if not state.get('feedback_checked'):
             # Fence execution and persist the one-pass decision before more model calls.
             def check(c):
                 report = acceptance_feedback(root, plan, ledger)
+                if state.get('probe_failures'):
+                    report['failures'] += state['probe_failures']
+                    report['failure_count'] = len(report['failures'])
+                    report['status'] = 'failed'
                 state['feedback_checked'] = True
                 if report['status'] == 'failed':
                     state['feedback'] = report['failures']

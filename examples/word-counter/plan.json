@@ -51,5 +51,90 @@
       "writes": ["artifacts/review.json"],
       "deliverables": ["artifacts/review.json"]
     }
-  }
+  },
+  "probes": [
+    {
+      "name": "aggregation_case_sort",
+      "input": [
+        "A",
+        "a",
+        "b",
+        "A",
+        "b",
+        "☃"
+      ],
+      "expected_exit": 0,
+      "expected_output": [
+        {
+          "word": "A",
+          "count": 2
+        },
+        {
+          "word": "a",
+          "count": 1
+        },
+        {
+          "word": "b",
+          "count": 2
+        },
+        {
+          "word": "☃",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "duplicates_heavy",
+      "input": [
+        "x",
+        "x",
+        "x",
+        "y",
+        "y"
+      ],
+      "expected_exit": 0,
+      "expected_output": [
+        {
+          "word": "x",
+          "count": 3
+        },
+        {
+          "word": "y",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "input": [],
+      "expected_exit": 0,
+      "expected_output": []
+    },
+    {
+      "name": "singletons",
+      "input": [
+        "one",
+        "two"
+      ],
+      "expected_exit": 0,
+      "expected_output": [
+        {
+          "word": "one",
+          "count": 1
+        },
+        {
+          "word": "two",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "non_string_error",
+      "input": [
+        1,
+        2
+      ],
+      "expected_exit": 2
+    }
+  ]
 }

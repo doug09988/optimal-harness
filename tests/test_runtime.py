@@ -21,6 +21,7 @@ class RuntimeTests(unittest.TestCase):
         ex=BASE/'examples'/'word-counter'
         shutil.copytree(ex/'work',self.root); shutil.copytree(ex/'grader',self.grader)
         self.plan=json.loads((ex/'plan.json').read_text())
+        self.plan.pop('probes', None)  # Legacy scripted replies exercise probe-free projects.
         self.store=Store(self.base/'board.db'); self.engine=Engine(self.store,FakeQueue([]))
 
     def submit(self): self.engine.submit(self.root,self.plan,self.grader/'acceptance.json')

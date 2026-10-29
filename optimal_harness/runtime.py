@@ -638,6 +638,9 @@ async def run_task(engine, task):
                     last = finish_feedback
                     store.event('handoff_validation_denied', {'task': task['id'], 'reason': str(exc)})
                     continue
+                if task['stage'] == 'CODER':
+                    from .probes import run_probes
+                    run_probes(root, plan, ledger, store, task)
                 manifest.update(status='succeeded', usage=ledger.totals())
                 trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
                 store.handoff(task, {'status': 'ready', 'evidence': evidence, 'handoff': handoff,
