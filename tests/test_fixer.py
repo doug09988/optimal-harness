@@ -218,3 +218,95 @@ class FixerTests(unittest.TestCase):
         self.assertEqual(self.calls[0][0],
             'FINDING:\nfix counts\nFILE: wordfreq.py\nCURRENT CONTENT:\nold implementation\n'
             '\nReply with the complete corrected content of this file. No JSON, no envelope.')
+
+    def feedback_events(self):
+        with self.store.transaction() as c:
+            return [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='fixer_feedback'")]
+
+    def acceptance(self):
+        body = ('import unittest\nimport wordfreq\n'
+                'class Acceptance(unittest.TestCase):\n'
+                '    def test_counts(self):\n'
+                '        self.assertEqual(wordfreq.count, 2, "correct the count")\n')
+        (self.root/'test_acceptance.py').write_text(body)
+        return body
+
+    def test_feedback_once_with_names_details_same_targets_and_ledger(self):
+        self.setup_task()
+        original = self.acceptance()
+        def repair(prompt):
+            self.assertIn('test_counts', prompt)
+            self.assertIn('AssertionError: 1 != 2 : correct the count', prompt)
+            self.assertIn('same target set', prompt)
+            return 'count = 1\n'  # Still fails: no third pass.
+        task = self.attempt(['count = 1\n', '# unit', repair, '# repaired unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(len(self.calls), 4)
+        events = self.feedback_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['status'], 'failed')
+        self.assertEqual(events[0]['failure_count'], 1)
+        self.assertEqual((self.root/'test_acceptance.py').read_text(), original)
+        self.assertEqual(self.engine.integrity_errors('wordcounter', self.root), [])
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='model_call_finished'").fetchone()[0], 4)
+
+    def test_passing_acceptance_skips_feedback_pass(self):
+        self.setup_task()
+        self.acceptance()
+        task = self.attempt(['count = 2\n', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.feedback_events()[0]['failure_count'], 0)
+        self.assertEqual(self.feedback_events()[0]['status'], 'passed')
+
+    def test_missing_acceptance_records_event(self):
+        self.setup_task()
+        task = self.attempt(['# fixed', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.feedback_events()[0]['status'], 'missing')
+        self.assertFalse(self.feedback_events()[0]['ran'])
+
+    def test_collection_error_skips_feedback_pass(self):
+        self.setup_task()
+        (self.root/'test_acceptance.py').write_text('invalid syntax !\n')
+        task = self.attempt(['count = 2\n', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.feedback_events()[0]['status'], 'collection_error')
+
+    def test_feedback_resumes_without_extra_check_or_pass(self):
+        self.setup_task()
+        self.acceptance()
+        task = self.attempt(['count = 1\n', '# unit', 'count = 2\n',
+                             RuntimeError('model_request_killed_on_deadline')])
+        self.assertEqual(task['status'], 'QUEUED')
+        task = self.attempt(['# repaired unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(len(self.feedback_events()), 1)
+        self.assertIn('FILE: test_unit.py', self.calls[-1][0])
+
+    def test_feedback_does_not_consult_private_grader(self):
+        self.setup_task()
+        self.acceptance()
+        from pathlib import Path
+        original = Path.read_text
+        def read(path, *args, **kwargs):
+            if path.is_relative_to(self.grader):
+                raise AssertionError('fixer read private grader')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', read):
+            task = self.attempt(['count = 1\n', '# unit', 'count = 2\n', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+
+    def test_feedback_rejects_acceptance_edit_envelope(self):
+        self.setup_task()
+        original = self.acceptance()
+        task = self.attempt(['count = 1\n', '# unit',
+                             '{"action":"write","path":"test_acceptance.py","data":"pass"}',
+                             'count = 2\n', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'test_acceptance.py').read_text(), original)
+        self.assertEqual(len(self.feedback_events()), 1)
+        self.assertEqual(len(self.calls), 5)

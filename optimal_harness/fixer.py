@@ -1,8 +1,10 @@
 """Runtime-owned, resumable corrections of the requested files only."""
 import hashlib
 import json
+import re
+import sys
 from .coder import sanitize_plan
-from .policy import PolicyError, confined, normalized
+from .policy import PolicyError, confined, normalized, sandbox_command
 from .store import canonical
 from .prompt_budget import bounded, source_groups
 
@@ -28,6 +30,35 @@ def structured_fixes(value):
         for child in value:
             items.extend(structured_fixes(child))
     return items
+
+
+def acceptance_feedback(root, plan, ledger):
+    """Run only the public QA artifact; never consult private grading configuration."""
+    target = 'test_acceptance.py'
+    if not confined(root, target).is_file():
+        return {'ran': False, 'status': 'missing', 'failures': []}
+    reads = {target, *plan.get('implementation_paths', []), *plan.get('immutable_inputs', [])}
+    commands = plan['stages'].get('QA', {}).get('commands', {}).values()
+    for command in commands:
+        if target in command.get('reads', []):
+            reads.update(command['reads'])
+    command = {'argv': [sys.executable, '-m', 'unittest', 'discover', '-v', '-s', '.', '-p', target],
+               'reads': sorted(reads), 'writes': []}
+    try:
+        result = sandbox_command(root, command, min(ledger.budget['max_command_seconds'],
+                                  ledger.budget['max_seconds'] - ledger.seconds))
+    except (OSError, ValueError, PolicyError) as exc:
+        return {'ran': False, 'status': 'unavailable', 'failures': [], 'error': str(exc)[:800]}
+    output = result['stderr'] + '\n' + result['stdout']
+    failures = []
+    for match in re.finditer(r'^(FAIL|ERROR): (.+)\n-+\n(.*?)(?=^=+\n|^-+\nRan |\Z)',
+                             output, re.M | re.S):
+        failures.append({'name': match[2], 'detail': match[3].strip()[-800:]})
+    collection = any('unittest.loader._FailedTest' in f['name'] for f in failures)
+    status = ('passed' if result['exit_code'] == 0 else
+              'collection_error' if collection else 'failed' if failures else 'execution_error')
+    return {'ran': True, 'status': status, 'failure_count': len(failures),
+            'failures': failures, 'exit_code': result['exit_code'], 'reason': result['reason']}
 
 
 class DrivenFixer:
@@ -78,7 +109,7 @@ class DrivenFixer:
                      'hashes': hashes(items), 'applied': {}, 'unfixed': {}}
         # Exhausted items are retried on the next stage-9 attempt, accepted ones persist.
         state['unfixed'] = {}
-        protected = set(plan.get('qa_test_paths', [])) | set(
+        protected = {'test_acceptance.py'} | set(plan.get('qa_test_paths', [])) | set(
             plan['stages'].get('QA', {}).get('writes', []))
         allowed = set(conf.get('writes', []))
         runtime_paths = set(broker.writes) - allowed
@@ -190,7 +221,10 @@ class DrivenFixer:
                     ('\nVALIDATOR REASON: ' + reason +
                      '\nYour previous reply was unusable: ' + reason +
                      '. Reply with ONLY the complete corrected file content, no commentary, no code fences.'
-                     if reason else '')), evidence={'finding': change}, target=(path, current)), 4096)
+                     if reason else '')), evidence={'finding': change + ('\nWITHIN-CYCLE ACCEPTANCE FEEDBACK:\n' +
+                        canonical(state['feedback']) +
+                        '\nReturn corrected files for the same target set; acceptance tests are uneditable.'
+                        if state.get('feedback') else '')}, target=(path, current)), 4096)
                 content_valid = False
                 try:
                     if not body.strip():
@@ -233,6 +267,23 @@ class DrivenFixer:
         for index, (path, _) in enumerate(state['items']):
             if str(index) in state['applied']:
                 write(path)
+        if not state.get('feedback_checked'):
+            # Fence execution and persist the one-pass decision before more model calls.
+            def check(c):
+                report = acceptance_feedback(root, plan, ledger)
+                state['feedback_checked'] = True
+                if report['status'] == 'failed':
+                    state['feedback'] = report['failures']
+                    state['applied'] = {}
+                    state['unfixed'] = {}
+                store.save_fixer_progress(task, state, connection=c)
+                store._event(c, 'fixer_feedback', dict(report, task=task['id'],
+                             project=task['project_id'], cycle=task['cycle']))
+                return report
+            report = store.commit(task, check)
+            if report['status'] == 'failed':
+                return await self.run(engine, task, plan, root, conf, ledger, manifest,
+                                      broker, write, chunks, checkpoints, trusted_write, evidence)
         fixed = [item for index, item in enumerate(state['items']) if str(index) in state['applied']]
         return {'action': 'finish', 'summary': 'Applied requested fixes: ' + canonical(fixed),
                 'open_discrepancies': [f'Item {key} ({state["items"][int(key)][0]}): {reason}'
