@@ -151,6 +151,23 @@ async def run_task(engine, task):
         store.commit(task, effect, allow_report=True)
 
     def write_checkpoint(path, data=None, append=False, chunks=None, on_checkpoint=None):
+        # Validate the complete candidate, never individual storage chunks, and
+        # reject before publishing any bytes or checkpoint/progress receipts.
+        if data is not None and path.endswith('.py'):
+            store.assert_lease(task)
+            target = confined(root, path)
+            old = target.read_bytes() if append and target.is_file() else b''
+            candidate = old + data.encode('utf-8')
+            if len(candidate) > broker.max_bytes:
+                raise PolicyError(f'write total file size exceeds file limit of {broker.max_bytes} UTF-8 bytes')
+            try:
+                compile(candidate, path, 'exec')
+            except SyntaxError as exc:
+                reason = f'SyntaxError: {path}: line {exc.lineno}: {exc.msg}'
+                store.event('write_rejected', {'task': task['id'],
+                            'generation': task['generation'], 'path': path,
+                            'error_line': exc.lineno, 'reason': reason})
+                raise PolicyError(reason) from exc
         def effect(c):
             count = None
             if data is not None:

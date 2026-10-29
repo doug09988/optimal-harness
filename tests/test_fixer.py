@@ -49,7 +49,7 @@ class FixerTests(unittest.TestCase):
 
     def test_two_findings_exact_files_and_caps(self):
         self.setup_task()
-        body = '  "quote" \\path\n---CONTENT---\n☃\r\n' * 200
+        body = '#  "quote" \\path\n# ---CONTENT---\n# ☃\r\n' * 200
         def first(prompt):
             self.assertIn('fix counts', prompt)
             self.assertIn('old implementation\n', prompt)
@@ -75,8 +75,23 @@ class FixerTests(unittest.TestCase):
         handoff = json.loads((self.root / f"vault/runs/{task['id']}/a1/handoff.json").read_text())
         self.assertEqual(len(handoff['open_discrepancies']), 1)
         self.assertIn('Item 0 (wordfreq.py)', handoff['open_discrepancies'][0])
-        self.assertIn('code fence envelope', handoff['open_discrepancies'][0])
+        self.assertIn('SyntaxError: wordfreq.py: line 1', handoff['open_discrepancies'][0])
         self.assertEqual(len(self.calls), 4)
+
+    def test_python_syntax_rejection_keeps_previous_file_and_retries(self):
+        self.setup_task()
+        def rewrite(prompt):
+            self.assertIn('VALIDATOR REASON: SyntaxError:', prompt)
+            self.assertIn('line 2', prompt)
+            self.assertEqual((self.root/'wordfreq.py').read_text(), 'old implementation\n')
+            return '# valid rewrite'
+        task = self.attempt(['# first line\ndef broken(', rewrite, '# tests'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='write_rejected'")]
+        self.assertEqual(events[0]['error_line'], 2)
+        self.assertEqual(len(self.calls), 3)
 
     def test_empty_twice_then_nudge_recovers(self):
         self.setup_task()

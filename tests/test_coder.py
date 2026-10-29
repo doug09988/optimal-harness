@@ -29,7 +29,7 @@ class CoderTests(unittest.TestCase):
         return json.loads(next(self.root.glob('vault/runs/*/a1/handoff.json')).read_text())
 
     def test_exact_files_split_and_skip_disallowed(self):
-        content = '  "quote" \\path\n---CONTENT---\n☃\r\n' * 200
+        content = '#  "quote" \\path\n# ---CONTENT---\n# ☃\r\n' * 200
         task = self.run_driven([self.file_plan + '\nwordfreq.py :: duplicate', content, '# tests\n', '["sh", "-c", "bad"]'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual((self.root/'wordfreq.py').read_bytes(), content.encode())
@@ -40,6 +40,31 @@ class CoderTests(unittest.TestCase):
         self.assertIn('existing executor allowlist', self.handoff()['summary'])
         with self.store.transaction() as c:
             self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='oversized_accepted_split'").fetchone()[0], 1)
+
+    def test_python_rejection_retries_without_publishing_bad_bytes(self):
+        def rewrite(prompt):
+            self.assertIn('SyntaxError:', prompt)
+            self.assertIn('line 1', prompt)
+            self.assertFalse((self.root/'wordfreq.py').exists())
+            return 'value = 1\n'
+        task = self.run_driven([self.file_plan, '```python\nvalue = 1\n```',
+                                rewrite, '# tests', '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 5)
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='write_rejected'")]
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0]['path'], events[0]['error_line']), ('wordfreq.py', 1))
+        compile((self.root/'wordfreq.py').read_bytes(), 'wordfreq.py', 'exec')
+
+    def test_bad_python_exhausts_existing_file_retries(self):
+        task = self.run_driven([self.file_plan, 'def broken(', 'if True', '# tests'])
+        self.assertIn('coder_action_format_exhausted:unwritable', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 4)
+        self.assertFalse((self.root/'wordfreq.py').exists())
+        self.assertFalse(any(cp['path'] == 'wordfreq.py'
+                             for cp in self.store.checkpoints('wordcounter')))
 
     def test_sanitized_plan_completes_without_retry(self):
         task = self.run_driven(['README.md :: docs\n./wordfreq.py :: implementation\n'

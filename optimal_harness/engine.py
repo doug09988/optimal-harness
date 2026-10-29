@@ -303,9 +303,13 @@ class Engine:
         # Acceptance runners bundle multiple failing tests into one checker result.
         import re
         count = 0
+        seen = set()
         for item in results:
             if item['passed']:
                 continue
+            if item['error'] in seen:
+                continue
+            seen.add(item['error'])
             summaries = re.findall(r"FAILED \(([^)]+)\)", item['error'] or '')
             counts = re.findall(r"(?:failures|errors)=(\d+)", summaries[-1]) if summaries else []
             count += max(1, sum(map(int, counts)))
@@ -349,15 +353,17 @@ class Engine:
         result = verifier.verify(checks)
         self._apply_obligations(result, project, plan, root)
         result["receipt_pointers"] = self._record_verifier_receipts(project, root, verifier.receipts)
+        failures = list(dict.fromkeys(r["error"] for r in result["results"] if not r["passed"]))
+        count = self._failure_count(result['results'])
+        result['failures'] = failures
+        result['failure_count'] = count
         self.store.event("satisfiability_gate", {"project": project, "report": result})
         if any("sandbox could not establish isolation" in str(r["error"]) or
                "bubblewrap required" in str(r["error"]) for r in result["results"]):
             self.store.project_status(project, "ESCALATED", "independent verifier sandbox unavailable")
             return
-        failures = [r["error"] for r in result["results"] if not r["passed"]]
         from .failures import fingerprint as defect_fingerprint
         fingerprint = defect_fingerprint(failures, root)
-        count = self._failure_count(result['results'])
         best, regression = self.store.record_evaluation(
             project, count, fingerprint, failures, self._artifact_snapshot(project, plan))
         if regression:

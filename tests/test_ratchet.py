@@ -76,3 +76,25 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(Engine._failure_count([
             dict(passed=False, error='independent acceptance failed: FAILED (failures=9, errors=2)'),
             dict(passed=False, error='other gate failure'), dict(passed=True, error=None)]), 12)
+
+    def test_exact_duplicates_only_collapse_before_gate_evaluation(self):
+        errors = ['same', 'same', 'same!', 'same ',
+                  'acceptance FAILED (failures=2)', 'acceptance FAILED (failures=2)']
+        report = dict(passed=False, open_discrepancies=6,
+                      results=[dict(passed=False, error=e) for e in errors])
+        with patch.object(Verifier, 'verify', return_value=report), \
+             patch.object(self.engine, '_apply_obligations'), \
+             patch.object(self.engine, '_discrepancy_checks', return_value=[]):
+            self.engine._gate('wordcounter', self.plan, self.root)
+        best = self.store.project('wordcounter')['best_artifact']
+        self.assertEqual(best['failures'], list(dict.fromkeys(errors)))
+        self.assertEqual(best['failure_count'], 5)
+        self.assertEqual(report['failure_count'], 5)
+        from optimal_harness.failures import fingerprint
+        self.assertEqual(best['fingerprint'], fingerprint(list(dict.fromkeys(errors)), self.root))
+        with self.store.transaction() as c:
+            payload = json.loads(c.execute(
+                "SELECT payload FROM events WHERE kind='satisfiability_gate' LIMIT 1"
+            ).fetchone()[0])
+        self.assertEqual(payload['report']['failures'], best['failures'])
+        self.assertEqual(payload['report']['failure_count'], 5)

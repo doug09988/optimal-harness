@@ -231,7 +231,7 @@ class DrivenFixer:
                         raise PolicyError('empty file content')
                     if '\x00' in body:
                         raise PolicyError('file content contains NUL')
-                    if body.lstrip().startswith('```'):
+                    if not path.endswith('.py') and body.lstrip().startswith('```'):
                         raise PolicyError('file content contains a code fence envelope')
                     try:
                         envelope = json.loads(body)

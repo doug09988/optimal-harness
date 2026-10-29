@@ -189,6 +189,32 @@ class RuntimeTests(unittest.TestCase):
             asyncio.run(self.engine.run_task(task))
         return self.store.tasks('wordcounter')[0]
 
+    def test_non_python_fenced_write_is_unchanged(self):
+        body = '```python\ndef broken(\n```'
+        self.plan['stages']['CODER']['writes'].append('artifacts/plain.txt')
+        task = self.run_coder([
+            {'action': 'write', 'path': 'artifacts/plain.txt', 'data': body},
+            {'action': 'finish', 'summary': 'complete', 'open_discrepancies': []}],
+            role='FIXER')
+        self.assertEqual((self.root/'artifacts/plain.txt').read_text(), body)
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='write_rejected'").fetchone()[0], 0)
+
+    def test_python_append_rejection_preserves_checkpoint_and_retry(self):
+        def rewrite(prompt):
+            self.assertIn('SyntaxError: wordfreq.py: line 2', prompt)
+            self.assertEqual((self.root/'wordfreq.py').read_bytes(), b'value = 1\n')
+            return {'action': 'append', 'path': 'wordfreq.py', 'data': 'other = 2\n'}
+        task = self.run_coder([
+            {'action': 'write', 'path': 'wordfreq.py', 'data': 'value = 1\n', 'more': True},
+            {'action': 'append', 'path': 'wordfreq.py', 'data': 'def broken('},
+            rewrite,
+            {'action': 'write', 'path': 'test_unit.py', 'data': '# tests'},
+            {'action': 'finish', 'summary': 'complete', 'open_discrepancies': []}])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'wordfreq.py').read_bytes(), b'value = 1\nother = 2\n')
+        self.assertEqual(self.engine.integrity_errors('wordcounter', self.root), [])
+
     def test_all_writing_roles_bound_invalid_actions(self):
         for role in ('INTAKE', 'REVIEW', 'FIXER'):
             with self.subTest(role=role):
@@ -782,7 +808,7 @@ class RuntimeTests(unittest.TestCase):
         return json.dumps({'action': op, 'path': path, 'format': 'raw', 'more': more}) + '\n---CONTENT---\n' + data
 
     def test_raw_payload_round_trip_and_mixed_chunks(self):
-        content = '  "quotes" \\path\n---CONTENT---\n☃\r\nlast line\n'
+        content = '#  "quotes" \\path\n# ---CONTENT---\n# ☃\r\n# last line\n'
         task = self.run_coder([
             {'action': 'write', 'path': 'wordfreq.py', 'data': 'prefix\n', 'more': True},
             self.raw_action('wordfreq.py', content, 'append', True),
@@ -794,7 +820,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((self.root/'test_unit.py').read_bytes(), content.encode())
 
     def test_oversized_raw_and_json_writes_split_byte_exactly(self):
-        content = ('  "quotes" \\path\n---CONTENT---\n☃\r\n' * 180) + 'end\n'
+        content = ('#  "quotes" \\path\n# ---CONTENT---\n# ☃\r\n' * 180) + 'end\n'
         from unittest.mock import patch
         writes = []
         original = FileBroker.write
@@ -821,7 +847,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual([append for _, append in units], [False] + [True] * (len(units)-1))
 
     def test_oversized_more_true_and_mixed_continuation(self):
-        content = '☃' * 2800
+        content = '#' + '☃' * 2800
         def continuation(prompt):
             self.assertIn('Continue wordfreq.py using action=append', prompt)
             return {'action': 'append', 'path': 'wordfreq.py', 'data': '\nend', 'more': False}

@@ -1,0 +1,160 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "2c6239fc2e6041a6",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "9547736759ca4423",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "7abdece6b5d44c93",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "2c6239fc2e6041a6",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "9547736759ca4423",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "7abdece6b5d44c93",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}"
+          },
+          {
+            "generation": 2,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}"
+        },
+        {
+          "generation": 2,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 1: invalid syntax\",\"wordfreq.py\":\"SyntaxError: wordfreq.py: line 1: invalid syntax\"}"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 99,
+    "head": "e22945e4cbd86e8a5731ad62b5a1c41eead3c14ff897c1263da4ddbef0bd21a0"
+  },
+  "integrity_errors": []
+}
