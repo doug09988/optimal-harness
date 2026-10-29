@@ -429,6 +429,8 @@ class Engine:
                     for path in conf.get('deliverables', [])}
         present = {path for path in declared
                    if confined(root, path).is_file() and confined(root, path).stat().st_size > 0}
+        previous_count = self.store.previous_failure_count(project)
+        progress = previous_count is not None and count < previous_count
         previous_best = self.store.best_artifact(project)
         growth = (previous_best is not None and
                   bool(present - set(previous_best.get('present_deliverables', []))))
@@ -447,7 +449,9 @@ class Engine:
                      f"regressed failure count: {count}. Best artifact restored.\n"
                      + "\n".join(best['failures']))
         repeated = self.store.project(project).get("defect") == fingerprint
-        cycle, repeats = self.store.failure_cycle(project, fingerprint, count_defect=not growth)
+        cycle, repeats = self.store.failure_cycle(
+            project, fingerprint, count_defect=not growth and not progress,
+            reset_defect=progress and not growth)
         if not growth and repeats >= 3:
             if not regression:
                 self._restore_artifact(project, root, best)

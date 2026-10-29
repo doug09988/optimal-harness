@@ -414,10 +414,23 @@ class Store:
                         status='REGRESSION' if regression else 'EVALUATED'))
             return best, regression
 
-    def failure_cycle(self, project: str, defect: str, *, count_defect=True) -> tuple[int, int]:
+    def previous_failure_count(self, project: str):
+        """Return the last evaluated count, including growth and regressions."""
+        with self.transaction() as c:
+            row = c.execute(
+                "SELECT payload FROM events WHERE kind='artifact_evaluated' "
+                "AND json_extract(payload, '$.project')=? ORDER BY seq DESC LIMIT 1",
+                (project,)).fetchone()
+            return json.loads(row['payload'])['failure_count'] if row else None
+
+    def failure_cycle(self, project: str, defect: str, *, count_defect=True,
+                      reset_defect=False) -> tuple[int, int]:
         with self.transaction() as c:
             row = c.execute("SELECT cycle,defect,repeats FROM projects WHERE id=?", (project,)).fetchone()
-            if count_defect:
+            if reset_defect:
+                c.execute("UPDATE defect_counts SET repeats=0 WHERE project=? AND defect=?",
+                          (project, defect))
+            elif count_defect:
                 c.execute("INSERT INTO defect_counts(project,defect,repeats) VALUES(?,?,1) ON CONFLICT(project,defect) DO UPDATE SET repeats=repeats+1", (project,defect))
             prior = c.execute("SELECT repeats FROM defect_counts WHERE project=? AND defect=?", (project,defect)).fetchone()
             n = prior["repeats"] if prior else 0

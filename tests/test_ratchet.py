@@ -67,7 +67,7 @@ class RatchetTest(unittest.TestCase):
     def test_regressions_and_repeated_best_escalate_with_best_preserved(self):
         best = self.evaluate(9, 'original')['best_artifact']
         self.evaluate(38, 'regressed')
-        p = self.evaluate(24, 'worse_again')
+        p = self.evaluate(38, 'worse_again')
         self.assertEqual((p['status'], p['repeats']), ('ESCALATED', 3))
         self.assertEqual(p['best_artifact'], best)
         self.assertEqual((self.root / 'wordfreq.py').read_text(), 'original')
@@ -89,6 +89,52 @@ class RatchetTest(unittest.TestCase):
             self.assertEqual(flat['repeats'], repeats)
             self.assertNotEqual(flat['status'], 'ESCALATED')
         self.assertEqual(self.evaluate(12, 'landed')['status'], 'ESCALATED')
+
+    def assert_streak(self, count, repeats, status='ACTIVE'):
+        p = self.evaluate(count, 'stable')
+        self.assertEqual(p['repeats'], repeats)
+        if status == 'ESCALATED':
+            self.assertEqual(p['status'], status)
+        else:
+            self.assertNotEqual(p['status'], 'ESCALATED')
+        with self.store.transaction() as c:
+            event = json.loads(c.execute(
+                "SELECT payload FROM events WHERE kind='failed_cycle' ORDER BY seq DESC LIMIT 1"
+            ).fetchone()[0])
+        self.assertEqual(event['repeats'], repeats)
+
+    def test_progress_resets_same_defect_then_three_flat_cycles_escalate(self):
+        with patch('optimal_harness.failures.fingerprint', return_value='same-defect'):
+            self.assert_streak(8, 1)
+            self.assert_streak(7, 0)
+            self.assert_streak(7, 1)
+            self.assert_streak(7, 2)
+            self.assert_streak(7, 3, 'ESCALATED')
+
+    def test_growth_is_neutral_then_progress_resets_against_previous_count(self):
+        landed = self.root / 'test_unit.py'
+        landed.unlink(missing_ok=True)
+        with patch('optimal_harness.failures.fingerprint', return_value='same-defect'):
+            self.assert_streak(5, 1)
+            landed.write_text('new suite')
+            self.assert_streak(8, 1)
+            self.assert_streak(7, 0)
+            self.assert_streak(7, 1)
+            self.assert_streak(7, 2)
+            self.assert_streak(7, 3, 'ESCALATED')
+
+    def test_flat_from_start_escalates_on_third_cycle(self):
+        with patch('optimal_harness.failures.fingerprint', return_value='same-defect'):
+            self.assert_streak(1, 1)
+            self.assert_streak(1, 2)
+            self.assert_streak(1, 3, 'ESCALATED')
+
+    def test_descent_above_best_resets_streak(self):
+        with patch('optimal_harness.failures.fingerprint', return_value='same-defect'):
+            self.assert_streak(5, 1)
+            self.assert_streak(8, 2)
+            self.assert_streak(7, 0)
+            self.assert_streak(6, 0)
 
     def test_restore_older_best_preserves_deliverable_landed_after_best(self):
         landed = self.root / 'test_unit.py'
