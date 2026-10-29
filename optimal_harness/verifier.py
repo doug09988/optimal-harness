@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -185,7 +186,20 @@ class Verifier:
                                          {"grader_hidden_test.py": private_test})
                 self.receipts.append(result)
                 if result["exit_code"] != 0:
-                    return "independent acceptance failed: " + (result["stderr"] or result["stdout"])[-600:]
+                    output = result["stderr"] or result["stdout"]
+                    # Preserve test identities before the bounded diagnostic tail.
+                    headers = []
+                    for stream in (result["stderr"], result["stdout"]):
+                        for match in re.finditer(
+                            r"^(?:FAIL|ERROR):[^\S\n]+[^\s()]+[^\S\n]+\([^()\s]+\)"
+                            r"|^[^\s()]+[^\S\n]+\([^()\s]+\)[^\S\n]+\.\.\.[^\S\n]+(?:FAIL|ERROR)\b",
+                            stream, re.M,
+                        ):
+                            headers.append(match.group(0))
+                    header_text = "\n".join(dict.fromkeys(headers))
+                    return "independent acceptance failed: " + (
+                        header_text + "\n" if header_text else ""
+                    ) + output[-600:]
             elif kind == "json_value":
                 if get_key(self.json(item["path"]), item["key"]) != item["expected"]:
                     return f"{item['path']}: pinned value mismatch"
