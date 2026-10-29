@@ -1,0 +1,385 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 1,
+      "defect": "0a324c1dcbcd35d8",
+      "repeats": 1,
+      "stage_attempts": [
+        {
+          "task": "72405b3d1e1e41ae",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "1705a44d191d47b2",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "fa32d14a9a4b4723",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "eaa352d5a136421a",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "cfcf422d6ab84fa7",
+          "stage": "INTEGRATOR",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "50839f39f537411f",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "bc27eda392d34e19",
+          "stage": "QA",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "528225bde43741ee",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "12767b30084a411a",
+          "stage": "FIXER",
+          "cycle": 1,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "72405b3d1e1e41ae",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "1705a44d191d47b2",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "fa32d14a9a4b4723",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "eaa352d5a136421a",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "CODER",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "cfcf422d6ab84fa7",
+      "stage": "INTEGRATOR",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "suite"
+        ],
+        "deliverables": [
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "artifacts/integration_notes.md"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "INTEGRATOR",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "50839f39f537411f",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTEGRATOR",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "bc27eda392d34e19",
+      "stage": "QA",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "acceptance"
+        ],
+        "deliverables": [
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "test_acceptance.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "QA",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "528225bde43741ee",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of QA handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "QA",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "12767b30084a411a",
+      "stage": "FIXER",
+      "cycle": 1,
+      "status": "FAILED",
+      "failure": "error:no_progress:repeated_action",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"bytes\":15228,\"more\":false,\"sha256\":\"40d6f2c744611b85c499924054854b1232ce3ae44d1448fa9edc867b658cd2dd\",\"written\":\"wordfreq.py\"}",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 2,
+            "last_context": "{\"bytes\":15143,\"more\":false,\"sha256\":\"522e92f3be760d7225179ed7f17f60afcba4ad2be865a7bbcfb4cb08c928ffa7\",\"written\":\"wordfreq.py\"}",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 3,
+            "last_context": "{\"bytes\":15068,\"more\":false,\"sha256\":\"bbfa0f9463fb5a4ddd5e5b13e955ca1103296d6c646e4abade146c25596b69c4\",\"written\":\"wordfreq.py\"}",
+            "reason": "error:no_progress:repeated_action"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "reports/integration.json: suite is not green\nreports/qa.json: suite is not green\nindependent acceptance failed: code, 2)\nAssertionError: 1 != 2\n\n======================================================================\nFAIL: test_non_string_rejected (grader_hidden_test.Acceptance)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Users/argus/optimal-harness/runs/verify-20/work/.harness/commands/cmd-58dzkbrh/grader_hidden_test.py\", line 37, in test_non_string_rejected\n    self.assertEqual(run.returncode, 2)\nAssertionError: 1 != 2\n\n----------------------------------------------------------------------\nRan 5 tests in 0.119s\n\nFAILED (failures=5)\n\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nreports/integration.json: suite is not green\nreports/qa.json: suite is not green",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "reports/qa.json",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py"
+        ],
+        "prior_stage": "QA",
+        "role": "FIXER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"bytes\":15228,\"more\":false,\"sha256\":\"40d6f2c744611b85c499924054854b1232ce3ae44d1448fa9edc867b658cd2dd\",\"written\":\"wordfreq.py\"}",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 2,
+          "last_context": "{\"bytes\":15143,\"more\":false,\"sha256\":\"522e92f3be760d7225179ed7f17f60afcba4ad2be865a7bbcfb4cb08c928ffa7\",\"written\":\"wordfreq.py\"}",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 3,
+          "last_context": "{\"bytes\":15068,\"more\":false,\"sha256\":\"bbfa0f9463fb5a4ddd5e5b13e955ca1103296d6c646e4abade146c25596b69c4\",\"written\":\"wordfreq.py\"}",
+          "reason": "error:no_progress:repeated_action"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 496,
+    "head": "1add305a8c7e90be40bbeba46cc4c73b0bc0171543e2345289449a7d0c164f70"
+  },
+  "integrity_errors": []
+}

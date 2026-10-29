@@ -1,0 +1,385 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 1,
+      "defect": "0a324c1dcbcd35d8",
+      "repeats": 1,
+      "stage_attempts": [
+        {
+          "task": "a04f2286db0b48ec",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "6db89391c1a74da0",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "5b94268465604cbf",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "1b5855f843944625",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "5d1e77ec5cf64183",
+          "stage": "INTEGRATOR",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "4dba295b70134396",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "e454a35625fc47ff",
+          "stage": "QA",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "408cdf5c80bf4e2c",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "3b8f73474bf948e1",
+          "stage": "FIXER",
+          "cycle": 1,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "a04f2286db0b48ec",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "6db89391c1a74da0",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "5b94268465604cbf",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "1b5855f843944625",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "CODER",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "5d1e77ec5cf64183",
+      "stage": "INTEGRATOR",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "suite"
+        ],
+        "deliverables": [
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "artifacts/integration_notes.md"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "INTEGRATOR",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "4dba295b70134396",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTEGRATOR",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "e454a35625fc47ff",
+      "stage": "QA",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "acceptance"
+        ],
+        "deliverables": [
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "test_acceptance.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "QA",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "408cdf5c80bf4e2c",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of QA handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "QA",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "3b8f73474bf948e1",
+      "stage": "FIXER",
+      "cycle": 1,
+      "status": "FAILED",
+      "failure": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}"
+          },
+          {
+            "generation": 2,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "reports/integration.json: suite is not green\nreports/qa.json: suite is not green\nindependent acceptance failed: code, 2)\nAssertionError: 1 != 2\n\n======================================================================\nFAIL: test_non_string_rejected (grader_hidden_test.Acceptance)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Users/argus/optimal-harness/runs/verify-25/work/.harness/commands/cmd-9hha6hxa/grader_hidden_test.py\", line 37, in test_non_string_rejected\n    self.assertEqual(run.returncode, 2)\nAssertionError: 1 != 2\n\n----------------------------------------------------------------------\nRan 5 tests in 0.114s\n\nFAILED (failures=5)\n\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nreports/integration.json: suite is not green\nreports/qa.json: suite is not green",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "reports/qa.json",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py"
+        ],
+        "prior_stage": "QA",
+        "role": "FIXER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}"
+        },
+        {
+          "generation": 2,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "fixer_action_format_exhausted:unfixed; {\"0\":\"file content must be nonempty text without NUL or envelope\"}"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 463,
+    "head": "64531399e89d140e8382cecbc4f7a046c608a9493b30c1d3918e2ceaa2e0d10f"
+  },
+  "integrity_errors": []
+}

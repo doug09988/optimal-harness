@@ -1,0 +1,196 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "0226c19e38ff4609",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "67c4262603994331",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "ed4020cfdccc4b05",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "04d805698d2d4b5b",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "0226c19e38ff4609",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "67c4262603994331",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "ed4020cfdccc4b05",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "04d805698d2d4b5b",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "error:no_progress:repeated_action",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"accepted_sections\":[\"reviewed_stage\",\"counterexamples\",\"observations\",\"unresolved\"],\"accepted_this_write\":[\"counterexamples\",\"reviewed_stage\",\"unresolved\"],\"assembled\":\"artifacts/review.json\",\"missing_sections\":[]}\nREVIEW unknown section 'observed_behavior': rejected; no section retry charged",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 2,
+            "last_context": "{\"accepted_sections\":[\"counterexamples\",\"observations\",\"unresolved\",\"reviewed_stage\"],\"accepted_this_write\":[\"counterexamples\",\"unresolved\",\"reviewed_stage\"],\"assembled\":\"artifacts/review.json\",\"missing_sections\":[]}\nREVIEW unknown section 'observed_behavior': rejected; no section retry charged",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 3,
+            "last_context": "{\"accepted_sections\":[\"reviewed_stage\",\"counterexamples\",\"unresolved\",\"observations\"],\"accepted_this_write\":[\"counterexamples\",\"reviewed_stage\",\"unresolved\"],\"assembled\":\"artifacts/review.json\",\"missing_sections\":[]}\nREVIEW unknown section 'observed_behavior': rejected; no section retry charged",
+            "reason": "error:no_progress:repeated_action"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "CODER",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"accepted_sections\":[\"reviewed_stage\",\"counterexamples\",\"observations\",\"unresolved\"],\"accepted_this_write\":[\"counterexamples\",\"reviewed_stage\",\"unresolved\"],\"assembled\":\"artifacts/review.json\",\"missing_sections\":[]}\nREVIEW unknown section 'observed_behavior': rejected; no section retry charged",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 2,
+          "last_context": "{\"accepted_sections\":[\"counterexamples\",\"observations\",\"unresolved\",\"reviewed_stage\"],\"accepted_this_write\":[\"counterexamples\",\"unresolved\",\"reviewed_stage\"],\"assembled\":\"artifacts/review.json\",\"missing_sections\":[]}\nREVIEW unknown section 'observed_behavior': rejected; no section retry charged",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 3,
+          "last_context": "{\"accepted_sections\":[\"reviewed_stage\",\"counterexamples\",\"unresolved\",\"observations\"],\"accepted_this_write\":[\"counterexamples\",\"reviewed_stage\",\"unresolved\"],\"assembled\":\"artifacts/review.json\",\"missing_sections\":[]}\nREVIEW unknown section 'observed_behavior': rejected; no section retry charged",
+          "reason": "error:no_progress:repeated_action"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 277,
+    "head": "180952e78afa9fef626f456713e27afb0d91e2bfc9e86eec822bc271281305c1"
+  },
+  "integrity_errors": []
+}

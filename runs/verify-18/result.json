@@ -1,0 +1,347 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "db1cff8ac15a4e56",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "2b33815bee2a46ac",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "8ddcf437fb1b4cef",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "41daa30f18bd4d81",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "9ef96f76682e4415",
+          "stage": "INTEGRATOR",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "11492b984ca94933",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "ef9f2b89f0864a2d",
+          "stage": "QA",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "0fa8dded8c8f4ba0",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "db1cff8ac15a4e56",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "2b33815bee2a46ac",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "8ddcf437fb1b4cef",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "41daa30f18bd4d81",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "CODER",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "9ef96f76682e4415",
+      "stage": "INTEGRATOR",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "suite"
+        ],
+        "deliverables": [
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "artifacts/integration_notes.md"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "INTEGRATOR",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "11492b984ca94933",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTEGRATOR",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "ef9f2b89f0864a2d",
+      "stage": "QA",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "acceptance"
+        ],
+        "deliverables": [
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "test_acceptance.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "QA",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "0fa8dded8c8f4ba0",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "model_request_killed_on_deadline",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"accepted_sections\":[\"reviewed_stage\"],\"accepted_this_write\":[\"reviewed_stage\"],\"missing_sections\":[\"counterexamples\",\"observations\",\"unresolved\"]}",
+            "reason": "model_request_killed_on_deadline"
+          },
+          {
+            "generation": 2,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "model_request_killed_on_deadline"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "model_request_killed_on_deadline"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of QA handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "QA",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"accepted_sections\":[\"reviewed_stage\"],\"accepted_this_write\":[\"reviewed_stage\"],\"missing_sections\":[\"counterexamples\",\"observations\",\"unresolved\"]}",
+          "reason": "model_request_killed_on_deadline"
+        },
+        {
+          "generation": 2,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "model_request_killed_on_deadline"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "model_request_killed_on_deadline"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 354,
+    "head": "94914ef866f1144b130605532634275e0c1b672f39bc31da10a9e6cfd936ae0f"
+  },
+  "integrity_errors": []
+}

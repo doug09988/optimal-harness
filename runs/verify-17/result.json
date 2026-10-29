@@ -1,0 +1,183 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "234037c97b91403f",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 3
+        },
+        {
+          "task": "31905b4649134dd5",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "4261c92dd9714d35",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "234037c97b91403f",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "model_request_killed_on_deadline"
+          },
+          {
+            "generation": 2,
+            "last_context": "{\"bytes\":2913,\"more\":false,\"sha256\":\"82562111a5288cd1d0880d41c9fd03eea4edec0610c9caa9019f2f6ef73be770\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+            "reason": "error:no_progress:repeated_action"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "model_request_killed_on_deadline"
+        },
+        {
+          "generation": 2,
+          "last_context": "{\"bytes\":2913,\"more\":false,\"sha256\":\"82562111a5288cd1d0880d41c9fd03eea4edec0610c9caa9019f2f6ef73be770\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+          "reason": "error:no_progress:repeated_action"
+        }
+      ]
+    },
+    {
+      "id": "31905b4649134dd5",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "4261c92dd9714d35",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "model_request_killed_on_deadline",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"bytes\":38920,\"more\":false,\"sha256\":\"0d2ac09ee4f49146b38ba8445ac53e1ab2f1cf9909b00ee480b61f847f453c6a\",\"written\":\"wordfreq.py\"}",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 2,
+            "last_context": "{\"bytes\":9887,\"more\":false,\"sha256\":\"a9dd5165c6fbd20f6af74536533fe5d94a7ce135d7e317ab1d00ac7bd12d0536\",\"written\":\"wordfreq.py\"}",
+            "reason": "error:no_progress:repeated_action"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "model_request_killed_on_deadline"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"bytes\":38920,\"more\":false,\"sha256\":\"0d2ac09ee4f49146b38ba8445ac53e1ab2f1cf9909b00ee480b61f847f453c6a\",\"written\":\"wordfreq.py\"}",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 2,
+          "last_context": "{\"bytes\":9887,\"more\":false,\"sha256\":\"a9dd5165c6fbd20f6af74536533fe5d94a7ce135d7e317ab1d00ac7bd12d0536\",\"written\":\"wordfreq.py\"}",
+          "reason": "error:no_progress:repeated_action"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "model_request_killed_on_deadline"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 196,
+    "head": "c3731a5c8ebdb8d5a0f1c1b007e9c8a7740138d6fae0b02a5af99d65b0ae2c2d"
+  },
+  "integrity_errors": []
+}

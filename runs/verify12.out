@@ -1,0 +1,103 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "710e95013ed94af6",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "bb4f94d02b104dde",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "710e95013ed94af6",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "bb4f94d02b104dde",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "model_request_killed_on_deadline",
+      "attempts": 1,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"accepted_sections\":[\"reviewed_stage\",\"counterexamples\"],\"accepted_this_write\":[\"counterexamples\"],\"missing_sections\":[\"observations\",\"unresolved\"]}",
+            "reason": "model_request_killed_on_deadline"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"accepted_sections\":[\"reviewed_stage\",\"counterexamples\"],\"accepted_this_write\":[\"counterexamples\"],\"missing_sections\":[\"observations\",\"unresolved\"]}",
+          "reason": "model_request_killed_on_deadline"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 38,
+    "head": "0c78ef6d82b8933da5459989d6bea35990c8a054830a537e065f4672c42a9ef4"
+  },
+  "integrity_errors": []
+}

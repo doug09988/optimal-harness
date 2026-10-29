@@ -1,0 +1,378 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 1,
+      "defect": "0a324c1dcbcd35d8",
+      "repeats": 1,
+      "stage_attempts": [
+        {
+          "task": "91a6e14148424a75",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 2
+        },
+        {
+          "task": "62d6f5bb6c79436c",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "2d9aa818aa364936",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "3c6a3edd97a848ac",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "125f79a8ba7b4653",
+          "stage": "INTEGRATOR",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "cedc45d685d44d6b",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "1bf993c470d94697",
+          "stage": "QA",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "c3352f69d82543a0",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "ebde33858c5e4e4c",
+          "stage": "FIXER",
+          "cycle": 1,
+          "attempts": 1
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "91a6e14148424a75",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 2,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"bytes\":2558,\"more\":false,\"sha256\":\"4e674d7a113732672c43eca6c62d11c16f4afb2b59a92c1ac3b07b057e6d0e26\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+            "reason": "error:no_progress:repeated_action"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"bytes\":2558,\"more\":false,\"sha256\":\"4e674d7a113732672c43eca6c62d11c16f4afb2b59a92c1ac3b07b057e6d0e26\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+          "reason": "error:no_progress:repeated_action"
+        }
+      ]
+    },
+    {
+      "id": "62d6f5bb6c79436c",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "2d9aa818aa364936",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "3c6a3edd97a848ac",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "CODER",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "125f79a8ba7b4653",
+      "stage": "INTEGRATOR",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "suite"
+        ],
+        "deliverables": [
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "artifacts/integration_notes.md"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "INTEGRATOR",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "cedc45d685d44d6b",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "artifacts/integration_notes.md",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTEGRATOR",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "1bf993c470d94697",
+      "stage": "QA",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [
+          "acceptance"
+        ],
+        "deliverables": [
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTEGRATOR handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "test_acceptance.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "QA",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "c3352f69d82543a0",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of QA handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "test_acceptance.py",
+          "reports/qa.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "QA",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "ebde33858c5e4e4c",
+      "stage": "FIXER",
+      "cycle": 1,
+      "status": "FAILED",
+      "failure": "ModelError: local model request failed: Remote end closed connection without response",
+      "attempts": 1,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "ModelError: local model request failed: Remote end closed connection without response"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "reports/integration.json: suite is not green\nreports/qa.json: suite is not green\nindependent acceptance failed: code, 2)\nAssertionError: 1 != 2\n\n======================================================================\nFAIL: test_non_string_rejected (grader_hidden_test.Acceptance)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Users/argus/optimal-harness/runs/verify-23/work/.harness/commands/cmd-qccg7nu3/grader_hidden_test.py\", line 37, in test_non_string_rejected\n    self.assertEqual(run.returncode, 2)\nAssertionError: 1 != 2\n\n----------------------------------------------------------------------\nRan 5 tests in 0.119s\n\nFAILED (failures=5)\n\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:open_discrepancies\nunresolved structured discrepancies:unresolved\nunresolved structured discrepancies:open_discrepancies\nreports/integration.json: suite is not green\nreports/qa.json: suite is not green",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py",
+          "reports/qa.json",
+          "reports/integration.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py"
+        ],
+        "prior_stage": "QA",
+        "role": "FIXER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "ModelError: local model request failed: Remote end closed connection without response"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 429,
+    "head": "36fd69d7a0a9d18b3758aa88a662dc38f6e9d7e61fa302ecceb29fd64099059c"
+  },
+  "integrity_errors": []
+}
