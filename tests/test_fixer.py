@@ -154,6 +154,111 @@ class FixerTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 6)
         self.assertEqual(len([e for e in self.evidence(task) if 'raw_response' in e]), 6)
 
+    def test_final_exhaustion_degrades_and_reaches_gate(self):
+        self.setup_task(allow_unit=False)
+        plan = self.store.project('wordcounter')['plan']
+        plan['stages']['FIXER']['deliverables'] = ['wordfreq.py', 'test_unit.py']
+        with self.store.transaction() as c:
+            c.execute('UPDATE projects SET plan=? WHERE id=?', (json.dumps(plan), 'wordcounter'))
+        # Stage 43/44 shape: the deferred unit target extends this cycle's allowlist.
+        for _ in range(2):
+            task = self.attempt([''] * 6)
+            self.assertEqual(task['status'], 'QUEUED')
+        # Exercise the real gate, with its independent checks scripted locally.
+        result = {'results': [{'passed': False, 'error': 'repair still needed'}]}
+        from optimal_harness.verifier import Verifier
+        with patch.object(self.engine, '_advance', side_effect=lambda task, plan, root:
+                          self.engine._gate(task['project_id'], plan, root)), patch.object(
+                          Verifier, 'verify', return_value=result):
+            # attempt() normally suppresses advancement; run this final attempt directly.
+            self.engine.queue = FakeQueue([''] * 6)
+            asyncio.run(self.engine.run_task(self.store.claim('worker', 60)))
+        task = self.store.tasks('wordcounter')[1]
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        handoff = json.loads((self.root / f"vault/runs/{task['id']}/a3/handoff.json").read_text())
+        self.assertEqual(len(handoff['open_discrepancies']), 2)
+        self.assertEqual(len(handoff['failed_deliverables']), 2)
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='fixer_item_unfixed'")]
+            gates = c.execute("SELECT count(*) FROM events WHERE kind='satisfiability_gate'").fetchone()[0]
+            aborts = c.execute("SELECT count(*) FROM events WHERE kind='run_aborted' AND "
+                               "json_extract(payload, '$.generation')=3").fetchone()[0]
+        self.assertEqual({e['path'] for e in events}, {'wordfreq.py', 'test_unit.py'})
+        self.assertTrue(all(e['error'] == 'empty file content' for e in events))
+        self.assertEqual(gates, 1)
+        self.assertEqual(aborts, 0)
+
+    def test_final_budget_cap_still_aborts(self):
+        self.setup_task()
+        for _ in range(2):
+            self.attempt([''] * 6)
+        plan = self.store.project('wordcounter')['plan']
+        plan['stages']['FIXER'].setdefault('budget', {})['max_calls'] = 12
+        with self.store.transaction() as c:
+            c.execute('UPDATE projects SET plan=? WHERE id=?', (json.dumps(plan), 'wordcounter'))
+        task = self.attempt([])
+        self.assertEqual(task['status'], 'FAILED')
+        self.assertTrue(task['failure'].startswith('circuit_breaker'))
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='fixer_item_unfixed'").fetchone()[0], 0)
+
+    def test_final_plan_exhaustion_degrades(self):
+        self.setup_task(structured=False)
+        for _ in range(2):
+            self.assertEqual(self.attempt(['bad plan'] * 2)['status'], 'QUEUED')
+        task = self.attempt(['bad plan'] * 2)
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        handoff = json.loads((self.root / f"vault/runs/{task['id']}/a3/handoff.json").read_text())
+        self.assertIn('plan requires path :: change', handoff['open_discrepancies'][0])
+
+    def test_large_repair_segments_retry_only_bad_segment(self):
+        self.setup_task()
+        (self.root/'wordfreq.py').write_text('# old\n' * 151)
+        first = 'count = 2\n' + '# first\n' * 59
+        second = '# second\n' * 60
+        third = '# end\n' * 31
+        def retry(prompt):
+            self.assertIn('SEGMENT 2:', prompt)
+            self.assertIn(first, prompt)
+            self.assertIn('Invalid segment', prompt)
+            self.assertEqual((self.root/'wordfreq.py').read_text(), '# old\n' * 151)
+            return second + '<<<FIXER_MORE>>>'
+        task = self.attempt([first + '<<<FIXER_MORE>>>', '# missing marker', retry,
+                             third + '<<<FIXER_DONE>>>', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        body = (self.root/'wordfreq.py').read_text()
+        self.assertEqual(body, first + second + third)
+        compile(body, 'wordfreq.py', 'exec')
+        self.assertEqual([('SEGMENT 1:' in p, 'SEGMENT 2:' in p, 'SEGMENT 3:' in p)
+                          for p, _ in self.calls[:4]],
+                         [(True, False, False), (False, True, False),
+                          (False, True, False), (False, False, True)])
+
+    def test_segment_assembly_rejected_with_existing_syntax_context(self):
+        self.setup_task()
+        (self.root/'wordfreq.py').write_text('# old\n' * 151)
+        first = '# prefix\n' * 60
+        bad = '# before\ndef broken(:\n# after\n'
+        def retry(prompt):
+            self.assertIn('SyntaxError: wordfreq.py: line 62', prompt)
+            self.assertIn('62: def broken(', prompt)
+            self.assertIn('61: # before', prompt)
+            self.assertIn('63: # after', prompt)
+            self.assertEqual((self.root/'wordfreq.py').read_text(), '# old\n' * 151)
+            return '# repaired\n<<<FIXER_DONE>>>'
+        task = self.attempt([first + '<<<FIXER_MORE>>>', bad + '<<<FIXER_DONE>>>', retry, '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'wordfreq.py').read_text(), '# repaired\n')
+
+    def test_threshold_150_keeps_single_shot(self):
+        self.setup_task()
+        (self.root/'wordfreq.py').write_text('# old\n' * 150)
+        task = self.attempt(['# repaired', '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertNotIn('SEGMENT', self.calls[0][0])
+        self.assertIn('complete corrected content', self.calls[0][0])
+
     def test_raw_response_evidence_is_bounded(self):
         self.setup_task()
         body = '# snow ☃\n' * 1000

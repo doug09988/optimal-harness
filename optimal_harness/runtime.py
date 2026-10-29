@@ -337,8 +337,19 @@ async def run_task(engine, task):
                 store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                             'op': 'command', 'path_or_name': name, 'receipt': last})
             if fixer is not None:
-                action = await fixer.run(engine, task, plan, root, conf, ledger, manifest,
-                                         broker, write_checkpoint, storage_chunks, checkpoints, trusted_write, evidence)
+                try:
+                    action = await fixer.run(engine, task, plan, root, conf, ledger, manifest,
+                                             broker, write_checkpoint, storage_chunks, checkpoints, trusted_write, evidence)
+                except RuntimeError as exc:
+                    if (not str(exc).startswith('fixer_action_format_exhausted:') or
+                            len(task['brief'].get('attempt_failures', [])) < 2):
+                        raise
+                    # Hard caps retain priority even when the final response was malformed.
+                    with store.transaction() as c:
+                        stopped = store._meter_status(c, task)['stop']
+                    if stopped:
+                        raise RuntimeError('circuit_breaker:fixer_exhaustion_budget') from exc
+                    action = fixer.degraded(store, task, conf, str(exc), write_checkpoint)
             elif integrator is not None:
                 action = await integrator.run(engine, task, plan, root, conf, ledger, manifest,
                                               broker, write_checkpoint, storage_chunks, execute_command,
@@ -613,6 +624,10 @@ async def run_task(engine, task):
                             if coder is not None and coder.unwritable and coder.bodies:
                                 stage_conf = dict(conf, deliverables=[p for p in conf.get('deliverables', [])
                                                                        if p not in coder.unwritable])
+                            if fixer is not None and failed_deliverables:
+                                failed_paths = {item['path'] for item in failed_deliverables}
+                                stage_conf = dict(conf, deliverables=[p for p in conf.get('deliverables', [])
+                                                                       if p not in failed_paths])
                             document = compose_handoff(action, stage_conf.get('deliverables', []), resolved)
                             if task['stage'] in ('FIXER', 'REVIEW'):
                                 from .discrepancies import snapshot, validated, record
@@ -625,7 +640,7 @@ async def run_task(engine, task):
                         except (ValueError, PolicyError, OSError) as exc:
                             raise RuntimeError('handoff_not_ready_or_malformed:' + str(exc)) from exc
                         write_checkpoint(handoff, canonical(document) + '\n')
-                    engine._check_stage(root, task, stage_conf if coder is not None else conf, checkpoints, handoff)
+                    engine._check_stage(root, task, stage_conf if coder is not None or fixer is not None else conf, checkpoints, handoff)
                 except RuntimeError as exc:
                     if (task['stage'] != 'CODER' and 'open_discrepancies' not in action and
                             str(exc).startswith('error:missing_deliverables:')):
