@@ -1,0 +1,173 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "67529727d3a441f9",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 2
+        },
+        {
+          "task": "ad130bf32faf47ca",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "afa7797f129c4a07",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "67529727d3a441f9",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 2,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "{\"bytes\":2484,\"more\":false,\"sha256\":\"31a9fed6a069c44071b1ff0153b026a45adfb6802b046c595fb85614aaddd5ed\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+            "reason": "error:no_progress:repeated_action"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "{\"bytes\":2484,\"more\":false,\"sha256\":\"31a9fed6a069c44071b1ff0153b026a45adfb6802b046c595fb85614aaddd5ed\",\"written\":\"artifacts/intake.json\"}\nINTAKE artifact is complete and valid. The remaining step is to finish with summary and open_discrepancies; do not rewrite the artifact. Template: {\"action\":\"finish\",\"summary\":\"Describe completed work\",\"open_discrepancies\":[]}",
+          "reason": "error:no_progress:repeated_action"
+        }
+      ]
+    },
+    {
+      "id": "ad130bf32faf47ca",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "afa7797f129c4a07",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+          },
+          {
+            "generation": 2,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+        },
+        {
+          "generation": 2,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 125,
+    "head": "9d61e9ed9bcfccbb760b264965bd3f74765b7d1fbb90e17c81872eadac8ec9d8"
+  },
+  "integrity_errors": []
+}

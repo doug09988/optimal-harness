@@ -12,6 +12,32 @@ def parse_verdict(text):
         value = json.loads(text)
     except ValueError:
         value = None
+        start = text.find('{')
+        if start != -1:
+            depth = 0
+            in_string = False
+            escaped = False
+            for end in range(start, len(text)):
+                char = text[end]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == '\\':
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                elif char == '"':
+                    in_string = True
+                elif char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            value = json.loads(text[start:end + 1])
+                        except ValueError:
+                            pass
+                        break
     if isinstance(value, dict):
         verdict = value.get('verdict')
         if verdict in ('APPROVE', 'REQUEST_CHANGES'):
