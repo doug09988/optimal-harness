@@ -546,14 +546,17 @@ class RuntimeTests(unittest.TestCase):
         def verdict(prompt):
             self.assertIn(marker, prompt)
             self.assertIn('Observed facts', prompt)
-            self.assertIn('exactly one line', prompt)
+            self.assertIn('exactly one JSON object and nothing else', prompt)
+            self.assertIn('discrepancy_resolutions', prompt)
+            self.assertNotIn('first line must', prompt)
+            self.assertNotIn('No JSON or envelope', prompt)
             return 'APPROVE'
         task = self.run_coder(['""', marker, observation, '', verdict], role='REVIEW')
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         with self.store.transaction() as c:
             events = c.execute("SELECT payload FROM events WHERE kind='model_call_started' ORDER BY rowid").fetchall()
         self.assertEqual([json.loads(row[0])['completion_cap'] for row in events],
-                         [2048, 2048, 2048, 2048, 128])
+                         [2048, 2048, 2048, 2048, 1024])
 
     def test_deadline_kill_leaves_queue_available_for_stage_retry(self):
         from optimal_harness.model import ModelQueue, ModelError
@@ -607,7 +610,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_driven_review_resumes_after_two_of_four_sections(self):
         calls = self.review_attempts()
-        self.assertEqual([cap for _, cap in calls], [2048] * 5 + [128])
+        self.assertEqual([cap for _, cap in calls], [2048] * 5 + [1024])
         self.assertIn('SECTION: observations', calls[3][0])
         self.assertIn('SECTION: unresolved', calls[4][0])
         self.assertIn('ATTEMPTED missing input', calls[5][0])
@@ -618,7 +621,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_driven_review_changed_artifact_discards_progress(self):
         calls = self.review_attempts(change_input=True)
-        self.assertEqual([cap for _, cap in calls], [2048] * 7 + [128])
+        self.assertEqual([cap for _, cap in calls], [2048] * 7 + [1024])
         self.assertIn('SECTION: reviewed_stage', calls[3][0])
         self.assertIn('SECTION: counterexamples', calls[4][0])
         self.assertNotIn('ATTEMPTED missing input', calls[-1][0])
@@ -726,6 +729,36 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(report['reviewed_stage'], prior_stage)
                     self.assertEqual(resolutions(self.store, 'wordcounter'), [entry])
                     self.assertEqual(self.engine._discrepancy_checks('wordcounter'), [])
+
+    def test_review_large_json_verdict_records_several_resolutions(self):
+        from optimal_harness.discrepancies import identity, resolutions
+        claims = [f'superseded observation {i}' for i in range(5)]
+        (self.root/'artifacts').mkdir(exist_ok=True)
+        (self.root/'artifacts/review.json').write_text(json.dumps({'unresolved': claims}))
+        entries = [dict(identity=identity(claim), disposition='STALE',
+                        note=('The later review checked the missing input case and observed the '
+                              'expected error result. The current artifact handles this case, '
+                              'so the earlier observation is superseded by the recorded evidence.'))
+                   for claim in claims]
+        payload = json.dumps(dict(verdict='APPROVE', discrepancy_resolutions=entries))
+        # Roughly 600 tokens at four characters per token; well beyond the old cap.
+        self.assertGreater(len(payload), 400 * 4)
+        self.assertLess(len(payload), 700 * 4)
+
+        def verdict(prompt):
+            self.assertIn('DISCREPANCY CLOSURE:', prompt)
+            self.assertIn('exactly one JSON object and nothing else', prompt)
+            self.assertNotIn('Alternatively', prompt)
+            return payload
+
+        task = self.run_coder(['QA', 'ATTEMPTED missing input', '',
+                               json.dumps(claims), verdict], role='REVIEW', prior_stage='QA')
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 5)
+        self.assertCountEqual(resolutions(self.store, 'wordcounter'), entries)
+        report = json.loads((self.root/'artifacts/review.json').read_text())
+        self.assertEqual(report['verdict'], 'APPROVE')
+        self.assertEqual(self.engine._discrepancy_checks('wordcounter'), [])
 
     def test_review_invalid_json_verdict_exhaustion(self):
         task = self.run_coder(['""', 'attempt', '', '',

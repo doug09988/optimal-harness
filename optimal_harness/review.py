@@ -100,7 +100,7 @@ class DrivenReview:
 
     @property
     def completion_cap(self):
-        return 128 if self.current == 'verdict' else 2048
+        return 1024 if self.current == 'verdict' else 2048
 
     def section_sources(self, sources, artifact_paths):
         """Keep artifacts and their cited source spans, excluding unrelated inputs."""
@@ -143,8 +143,9 @@ class DrivenReview:
                               for path, text in sources.items()}))
         if section == 'verdict':
             context += '\nACCEPTED SECTIONS (context only):\n' + canonical(self.sections)
-            contract = ('Give the review verdict. The first line must be exactly APPROVE or REQUEST_CHANGES. '
-                        'Reply with exactly one line and nothing else. No JSON or envelope.')
+            contract = ('Give the review verdict. Reply with exactly one JSON object and nothing else: '
+                        '{"verdict": "APPROVE"|"REQUEST_CHANGES", "discrepancy_resolutions": [...]}. '
+                        'Use an empty discrepancy_resolutions list when there are no resolutions.')
         else:
             question = self.QUESTIONS[section]
             if section == 'reviewed_stage':
@@ -154,8 +155,8 @@ class DrivenReview:
                         'For list sections, plain text becomes one list entry; an empty response means an empty list.')
         if section == 'verdict' and self.closure:
             context += '\nDISCREPANCY CLOSURE:\n' + canonical(self.closure)
-            contract += (' Alternatively reply with a JSON object containing verdict and discrepancy_resolutions: '
-                         'a list of {identity, disposition: STALE, note} for observations this later pass supersedes. '
+            contract += (' discrepancy_resolutions is a list of {identity, disposition: STALE, note} '
+                         'for observations this later pass supersedes. '
                          'Give a reason in each note. Silence leaves items open.')
         return ReviewPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 

@@ -35,3 +35,18 @@ class ReviewVerdictTests(unittest.TestCase):
                      '{"verdict":"APPROVE"}\nextra', ''):
             with self.subTest(text=text), self.assertRaisesRegex(PolicyError, 'unparseable_verdict'):
                 parse_verdict(text)
+
+    def test_truncated_json_is_rejected(self):
+        payload = json.dumps({'verdict': 'APPROVE', 'discrepancy_resolutions': [
+            {'identity': 'claim', 'disposition': 'STALE', 'note': 'superseded evidence'}]})
+        with self.assertRaisesRegex(PolicyError, 'unparseable_verdict'):
+            parse_verdict(payload[:payload.index('evidence') + 3])
+
+    def test_driven_verdict_completion_cap(self):
+        from optimal_harness.review import DrivenReview
+        review = DrivenReview('QA')
+        for reply in ('QA', 'ATTEMPTED missing input', '', ''):
+            self.assertEqual(review.completion_cap, 2048)
+            review.accept(reply)
+        self.assertEqual(review.current, 'verdict')
+        self.assertEqual(review.completion_cap, 1024)

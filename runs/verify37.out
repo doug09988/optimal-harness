@@ -1,0 +1,196 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "40a26a857a6b42df",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "83f991fa4db6464b",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "839d8627b5a94446",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "cd9958f54b2e4f51",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "40a26a857a6b42df",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "83f991fa4db6464b",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "839d8627b5a94446",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "cd9958f54b2e4f51",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+            "reason": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES"
+          },
+          {
+            "generation": 2,
+            "last_context": "unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+            "reason": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES"
+          },
+          {
+            "generation": 3,
+            "last_context": "unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+            "reason": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of CODER handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "CODER",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+          "reason": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES"
+        },
+        {
+          "generation": 2,
+          "last_context": "unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+          "reason": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES"
+        },
+        {
+          "generation": 3,
+          "last_context": "unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES",
+          "reason": "review_action_format_exhausted:verdict; unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 131,
+    "head": "9d71df27a23ac6be54440aeda818f0128691c20303232e2af0660d243c37a639"
+  },
+  "integrity_errors": []
+}
