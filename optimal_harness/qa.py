@@ -53,8 +53,11 @@ class DrivenQA:
     def _prompt(self, sources, evidence, prior):
         context = 'QA SPEC AND PERMITTED INPUTS:\n' + canonical(sources)
         if self.current == 'plan':
-            contract = ('List acceptance test function names, one per line, plain text. '
-                        'Use Python identifiers starting with test_. Maximum 40. No JSON or envelope.')
+            contract = ('List acceptance tests, one per line, plain text, in this exact format: '
+                        'test_name | verbatim SPEC clause. Each test must cite an exact quote from the SPEC '
+                        'that justifies its expectation; copy the clause without quotation marks, '
+                        'collapsing whitespace if needed. Use Python identifiers starting with test_. '
+                        'Maximum 40. No JSON or envelope.')
         elif self.current == 'report':
             context += ('\nASSEMBLED ACCEPTANCE TESTS:\n' + prior['acceptance tests'] +
                         '\nEXECUTION RECORD (verbatim):\n' + evidence['execution'] +
@@ -62,6 +65,7 @@ class DrivenQA:
             contract = ('Reply with findings as plain text. The FIRST line must be exactly PASS or FAIL, '
                         'your verdict on the artifact under test. No JSON or envelope.')
         else:
+            context += '\nSANITIZED TEST PLAN:\n' + canonical(self.plan)
             contract = ('TEST: ' + self.current + '\nReply with only this test function\'s Python code. '
                         'No JSON, no envelope, no other tests. Use the exact planned name. '
                         'It will be a unittest.TestCase method (self), or a function with no arguments. '
@@ -69,13 +73,37 @@ class DrivenQA:
                         'Any other imports must be inside the function. Derive criteria from SPEC alone.')
         return QAPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 
-    def accept(self, text):
+    def accept(self, text, spec='', dropped=None, fallback=None):
         current = self.current
         if current == 'plan':
-            names = list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            entries = [line.partition('|') for line in lines]
+            names = [name.strip() for name, _, _ in entries]
             if not names or any(not name.isidentifier() or not name.startswith('test_') for name in names):
                 raise PolicyError('plan must contain test_ Python identifiers, one per line')
-            self.plan = names[:40]
+            if not any(separator for _, separator, _ in entries):
+                # Legacy plans cannot be checked per entry; preserve their existing behavior.
+                self.plan = list(dict.fromkeys(names))[:40]
+                if fallback:
+                    fallback({'reason': 'citation parsing unavailable: old-format plan has no citations'})
+            else:
+                normalized_spec = ' '.join(spec.split())
+                self.plan = []
+                seen = set()
+                for (_, separator, citation), name in zip(entries, names):
+                    if name in seen:
+                        continue
+                    seen.add(name)
+                    if len(seen) > 40:
+                        break
+                    quote = ' '.join(citation.split())
+                    reason = ('missing spec citation' if not separator or not quote else
+                              'spec citation is not a verbatim substring' if quote not in normalized_spec else None)
+                    if reason:
+                        if dropped:
+                            dropped({'name': name, 'reason': reason})
+                    else:
+                        self.plan.append(name)
         elif current == 'report':
             lines = text.splitlines()
             if not lines or lines[0] not in ('PASS', 'FAIL'):

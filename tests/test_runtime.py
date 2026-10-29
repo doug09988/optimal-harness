@@ -229,6 +229,54 @@ class RuntimeTests(unittest.TestCase):
             events = [json.loads(r[0]) for r in c.execute("SELECT payload FROM events WHERE kind='tool_action'")]
         self.assertTrue(any(canonical(self.execution) in e['receipt'] for e in events if e['op'] == 'command'))
 
+    def test_driven_qa_citations_drop_overreach_before_generation(self):
+        spec_path = self.root / self.plan['spec']
+        spec_path.write_text('Count repeated strings exactly,\n  with case sensitivity.\n')
+        def plan_reply(prompt):
+            self.assertIn('test_name | verbatim SPEC clause', prompt)
+            return ('test_exact | Count repeated strings exactly, with case sensitivity.\n'
+                    'test_fold | Fold all input strings to lowercase.\n'
+                    'test_missing\n'
+                    'test_empty | ')
+        def body(prompt):
+            self.assertIn('SANITIZED TEST PLAN:\n["test_exact"]', prompt)
+            self.assertNotIn('test_fold', prompt)
+            self.assertNotIn('test_missing', prompt)
+            self.assertNotIn('test_empty', prompt)
+            return 'def test_exact():\n    assert True'
+        task = self.run_qa([plan_reply, body, 'PASS'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 3)
+        code = (self.root / 'test_acceptance.py').read_text()
+        self.assertIn('def test_exact', code)
+        for name in ('test_fold', 'test_missing', 'test_empty'):
+            self.assertNotIn(name, code)
+        with self.store.transaction() as c:
+            drops = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='qa_test_dropped' ORDER BY rowid")]
+        self.assertEqual([entry['name'] for entry in drops],
+                         ['test_fold', 'test_missing', 'test_empty'])
+        self.assertIn('not a verbatim substring', drops[0]['reason'])
+        self.assertEqual([entry['reason'] for entry in drops[1:]],
+                         ['missing spec citation', 'missing spec citation'])
+        handoff = json.loads(next(self.root.glob('vault/runs/*/a1/handoff.json')).read_text())
+        self.assertEqual(handoff['open_discrepancies'], [])
+
+    def test_driven_qa_legacy_plan_records_fallback_without_drops(self):
+        task = self.run_qa(['test_legacy', 'def test_legacy():\n    assert True', 'PASS'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertIn('def test_legacy', (self.root / 'test_acceptance.py').read_text())
+        with self.store.transaction() as c:
+            kinds = [r[0] for r in c.execute('SELECT kind FROM events')]
+        self.assertEqual(kinds.count('qa_plan_citation_fallback'), 1)
+        self.assertNotIn('qa_test_dropped', kinds)
+
+    def test_driven_qa_all_citations_invalid_produces_empty_acceptance(self):
+        task = self.run_qa(['test_invented | Normalize all Unicode strings.', 'PASS'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 2)
+        self.assertNotIn('def test_', (self.root / 'test_acceptance.py').read_text())
+
     def test_driven_qa_unwritable_does_not_kill_stage(self):
         def report(prompt):
             self.assertIn('test_bad', prompt)

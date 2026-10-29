@@ -450,7 +450,9 @@ async def run_task(engine, task):
                     action = coder.finish()
                 elif qa is not None:
                     try:
-                        action = qa.accept(result.text)
+                        action = qa.accept(result.text, spec=source_read(plan['spec']) if qa.current == 'plan' else '',
+                            dropped=lambda entry: store.event('qa_test_dropped', entry),
+                            fallback=lambda entry: store.event('qa_plan_citation_fallback', entry))
                     except PolicyError as exc:
                         last = str(exc)
                         store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})
