@@ -104,6 +104,31 @@ def unwrap_python_fence(content):
     return ''.join(lines)
 
 
+def join_unterminated_string(candidate, path, error):
+    """Try at most four newline escapes at the original short-string line."""
+    if not (error.msg == 'EOL while scanning string literal'
+            or error.msg.startswith('unterminated string literal')):
+        return None
+    lines = candidate.decode('utf-8').splitlines(keepends=True)
+    index = (error.lineno or 1) - 1
+    for _ in range(4):
+        if not 0 <= index < len(lines) - 1:
+            break
+        lines[index:index+2] = [lines[index].rstrip('\r\n') + r'\n' + lines[index+1]]
+        joined = ''.join(lines).encode('utf-8')
+        try:
+            compile(joined, path, 'exec')
+        except SyntaxError as next_error:
+            # Never continue through a different syntax defect or literal.
+            if not (next_error.lineno == error.lineno and
+                    (next_error.msg == 'EOL while scanning string literal'
+                     or next_error.msg.startswith('unterminated string literal'))):
+                break
+        else:
+            return joined
+    return None
+
+
 async def run_task(engine, task):
     store = engine.store
     project = store.project(task['project_id'])
@@ -188,18 +213,29 @@ async def run_task(engine, task):
             try:
                 compile(candidate, path, 'exec')
             except SyntaxError as exc:
-                reason = f'SyntaxError: {path}: line {exc.lineno}: {exc.msg}'
-                lines = candidate.decode('utf-8').splitlines()
-                line = min(max(exc.lineno or 1, 1), len(lines))
-                context = '\n'.join(f'{n}: {lines[n-1][:400]}'
-                                    for n in range(max(1, line-3), min(len(lines), line+3)+1))
-                reason += '\nRejected content context (error line ±3):\n' + context
-                store.event('write_rejected', {'task': task['id'],
-                            'generation': task['generation'], 'path': path,
-                            'error_line': exc.lineno, 'reason': reason,
-                            'first_line': candidate.decode('utf-8').splitlines()[0][:80]
-                            if candidate.splitlines() else ''})
-                raise PolicyError(reason) from exc
+                repaired = join_unterminated_string(candidate, path, exc)
+                if repaired is not None and len(repaired) <= broker.max_bytes:
+                    data = repaired.decode('utf-8')
+                    append = False
+                    if chunks is not None:
+                        chunks = storage_chunks(data)
+                    store.event('write_repaired', {'task': task['id'],
+                                'generation': task['generation'], 'path': path,
+                                'repair_kind': 'unterminated_string_join',
+                                'error_line': exc.lineno})
+                else:
+                    reason = f'SyntaxError: {path}: line {exc.lineno}: {exc.msg}'
+                    lines = candidate.decode('utf-8').splitlines()
+                    line = min(max(exc.lineno or 1, 1), len(lines))
+                    context = '\n'.join(f'{n}: {lines[n-1][:400]}'
+                                        for n in range(max(1, line-3), min(len(lines), line+3)+1))
+                    reason += '\nRejected content context (error line ±3):\n' + context
+                    store.event('write_rejected', {'task': task['id'],
+                                'generation': task['generation'], 'path': path,
+                                'error_line': exc.lineno, 'reason': reason,
+                                'first_line': candidate.decode('utf-8').splitlines()[0][:80]
+                                if candidate.splitlines() else ''})
+                    raise PolicyError(reason) from exc
         if (data is not None and task['stage'] in ('CODER', 'FIXER')
                 and path in plan.get('implementation_paths', [])
                 and path not in set(plan.get('qa_test_paths', [])) | set(plan.get('unit_test_paths', []))

@@ -74,6 +74,56 @@ class CoderTests(unittest.TestCase):
                         "SELECT payload FROM events WHERE kind='write_repaired'")]
                 self.assertEqual([event['path'] for event in events], ['wordfreq.py'])
 
+    def test_unterminated_short_strings_are_repaired(self):
+        for parts in (['{"first": 1,', '"second": 2}'],
+                      ['one', 'two', 'three'],
+                      ['one', 'two', 'three', 'four', 'five']):
+            with self.subTest(parts=parts):
+                self.setUp()
+                value = '\n'.join(parts)
+                body = "class TestExample:\n    def test_json(self):\n        value = '" + value + "'\n        return value\n"
+                task = self.run_driven([self.file_plan, '# impl', body, '[]'])
+                self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+                accepted = (self.root/'test_unit.py').read_text()
+                namespace = {}
+                exec(compile(accepted, 'test_unit.py', 'exec'), namespace)
+                self.assertEqual(namespace['TestExample']().test_json(), value)
+                self.assertEqual(accepted, body.replace(value, r'\n'.join(parts)))
+                with self.store.transaction() as c:
+                    events = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='write_repaired'")]
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]['repair_kind'], 'unterminated_string_join')
+                self.assertEqual(events[0]['error_line'], 3)
+                self.assertEqual(events[0]['path'], 'test_unit.py')
+
+    def test_string_repair_failures_preserve_original_rejection(self):
+        for bad in ("value = 'one\ntwo\nthree\nfour\nfive\nsix'\n",
+                    "value = 'never closed\nmore\n",
+                    "value = " + "'" * 3 + "triple\nmore\n",
+                    'value = (]\n',
+                    "value = 'one\ntwo'\nvalue = (]\n"):
+            with self.subTest(bad=bad):
+                self.setUp()
+                try:
+                    compile(bad, 'test_unit.py', 'exec')
+                except SyntaxError as exc:
+                    original = f'SyntaxError: test_unit.py: line {exc.lineno}: {exc.msg}'
+                def retry(prompt):
+                    self.assertIn(original, prompt)
+                    self.assertFalse((self.root/'test_unit.py').exists())
+                    return '# corrected tests'
+                task = self.run_driven([self.file_plan, '# impl', bad, retry, '[]'])
+                self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+                with self.store.transaction() as c:
+                    events = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='write_rejected'")]
+                    self.assertEqual(c.execute(
+                        "SELECT count(*) FROM events WHERE kind='write_repaired'").fetchone()[0], 0)
+                self.assertEqual(len(events), 1)
+                self.assertTrue(events[0]['reason'].startswith(original))
+                self.assertEqual(events[0]['first_line'], bad.splitlines()[0])
+
     def test_unfenced_python_is_unchanged_without_repair(self):
         body = '# legitimate ```python later in line\r\nvalue = "```"\r\n'
         task = self.run_driven([self.file_plan, body, '# tests', '[]'])

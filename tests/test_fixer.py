@@ -48,6 +48,19 @@ class FixerTests(unittest.TestCase):
             asyncio.run(self.engine.run_task(self.store.claim('worker', 60)))
         return self.store.tasks('wordcounter')[-1]
 
+    def test_chunked_python_string_repair(self):
+        self.setup_task()
+        body = '# padding\n' * 600 + "value = 'one\ntwo'\n"
+        task = self.attempt(['# implementation', body])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'test_unit.py').read_text(),
+                         '# padding\n' * 600 + "value = 'one\\ntwo'\n")
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='write_repaired'")]
+        self.assertEqual(events[0]['repair_kind'], 'unterminated_string_join')
+        self.assertEqual(events[0]['error_line'], 601)
+
     def test_cycle_repair_extension_does_not_leak_to_next_cycle(self):
         self.setup_task(allow_unit=False)
         task = self.attempt(['# implementation', 'def broken(', '```python\n# repaired unit\n```'])
