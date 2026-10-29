@@ -209,8 +209,10 @@ class Engine:
             if nxt == "__GATE__":
                 self._gate(task["project_id"], plan, root)
             else:
+                from .adjudication import notes
                 self.store.enqueue(task["project_id"], nxt, task["cycle"],
-                                   make_brief(nxt, plan, task["brief"].get("notes_verbatim", ""), "REVIEW"))
+                                   make_brief(nxt, plan, task["brief"].get("notes_verbatim", "") +
+                                              notes(self.store, task["project_id"]), "REVIEW"))
         else:
             nxt = STAGE_NEXT[role]
             review_notes = f"Counterexample-pass review of {role} handoff; your observations are evidence, never a verdict."
@@ -351,6 +353,8 @@ class Engine:
                 checks.append({"type": "command_receipt", "path": command["capture"]})
         verifier = Verifier(root, private.parent)
         result = verifier.verify(checks)
+        from .adjudication import account
+        account(self, project, plan, root, checks, result)
         self._apply_obligations(result, project, plan, root)
         result["receipt_pointers"] = self._record_verifier_receipts(project, root, verifier.receipts)
         failures = list(dict.fromkeys(r["error"] for r in result["results"] if not r["passed"]))

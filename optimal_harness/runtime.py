@@ -299,6 +299,15 @@ async def run_task(engine, task):
             # trust an uncheckpointed on-disk file merely because it exists.
             for path, body in coder.bodies.items():
                 write_checkpoint(path, body, chunks=storage_chunks(body))
+        if task['stage'] == 'FIXER':
+            from .adjudication import run as adjudicate, notes as quarantine_notes, quarantines
+            await adjudicate(engine, task, plan, root, ledger)
+            task = dict(task, brief=dict(task['brief']))
+            task['brief']['notes_verbatim'] += quarantine_notes(store, task['project_id'])
+            quarantined = {(q['test'].split()[0]) for q in
+                           quarantines(store, task['project_id'])}
+            if 'failing_tests' in task['brief']:
+                task['brief']['failing_tests'] = [t for t in task['brief']['failing_tests'] if t['name'] not in quarantined]
         fixer = DrivenFixer() if task['stage'] == 'FIXER' else None
         integrator = DrivenIntegrator() if task['stage'] == 'INTEGRATOR' else None
         while True:
@@ -383,6 +392,8 @@ async def run_task(engine, task):
                 if qa is not None:
                     sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
                                if confined(root, path).is_file()}
+                    from .adjudication import notes as quarantine_notes
+                    sources['quarantine_notes'] = quarantine_notes(store, task['project_id'])
                     prompt = qa.prompt(sources, record=lambda shed: store.event('prompt_context_shed',
                         dict(shed, task=task['id'], generation=task['generation'])))
                     manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
@@ -494,9 +505,14 @@ async def run_task(engine, task):
                     action = coder.finish()
                 elif qa is not None:
                     try:
-                        action = qa.accept(result.text, spec=source_read(plan['spec']) if qa.current == 'plan' else '',
+                        planning = qa.current == 'plan'
+                        action = qa.accept(result.text, spec=source_read(plan['spec']) if planning else '',
                             dropped=lambda entry: store.event('qa_test_dropped', entry),
                             fallback=lambda entry: store.event('qa_plan_citation_fallback', entry))
+                        if planning:
+                            store.event('qa_test_citations', dict(project=task['project_id'], citations={
+                                name.strip(): clause.strip() for line in result.text.splitlines()
+                                for name, sep, clause in [line.partition('|')] if sep and name.strip() in qa.plan}))
                     except PolicyError as exc:
                         last = str(exc)
                         store.event('tool_denied', {'task': task['id'], 'op': 'write', 'reason': last})

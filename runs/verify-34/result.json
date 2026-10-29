@@ -1,0 +1,160 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "53cee51578194b8d",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "1178c277e013467d",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "5e2c6859c38e4c26",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "53cee51578194b8d",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "1178c277e013467d",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "5e2c6859c38e4c26",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}"
+          },
+          {
+            "generation": 2,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}"
+        },
+        {
+          "generation": 2,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:unwritable; {\"test_unit.py\":\"SyntaxError: test_unit.py: line 36: closing parenthesis ')' does not match opening parenthesis '{'\"}"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 142,
+    "head": "79b6cd985e9f1c793fcbb2badb880d71e73ef73c8f75f479480f8ec1b246263d"
+  },
+  "integrity_errors": []
+}
