@@ -159,8 +159,27 @@ class Engine:
         from .runtime import run_task
         await run_task(self, task)
 
+    def _carry_over(self, root, task, conf, checkpoints):
+        """Keep the handoff whole using the latest accepted bytes in this run."""
+        latest = {cp['path']: cp for cp in self.store.checkpoints(task['project_id'])}
+        for path in conf.get('deliverables', []):
+            if path in checkpoints or path not in latest:
+                continue
+            cp = latest[path]
+            body = confined(root, cp['archive']).read_bytes()
+            if hashlib.sha256(body).hexdigest() != cp['sha256']:
+                raise PolicyError('checkpoint archive tampered:' + cp['archive'])
+            def restore(c):
+                atomic_write(confined(root, path), body)
+                self._checkpoint(root, task, path, checkpoints, 'carry_over', c)
+            self.store.commit(task, restore)
+            self.store.event('deliverable_carried_over', {
+                'task': task['id'], 'generation': task['generation'],
+                'path': path, 'sha256': cp['sha256'], 'source_task': cp['task']})
+
     def _check_stage(self, root: Path, task: dict, conf: dict,
                      checkpoints: dict[str, str], handoff: str) -> None:
+        self._carry_over(root, task, conf, checkpoints)
         missing = []
         for path in conf.get("deliverables", []):
             file = confined(root, path)

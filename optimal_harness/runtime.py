@@ -6,7 +6,7 @@ import json
 import re
 import time
 from pathlib import Path
-from .ledger import Ledger
+from .ledger import Ledger, BudgetExceeded
 from .model import SYSTEM_PREFIX, RawWritePrompt, parse_action, ModelError
 from .policy import PolicyError, atomic_write, confined, sandbox_command
 from .store import canonical, LeaseLost
@@ -341,6 +341,20 @@ async def run_task(engine, task):
                 task['brief']['failing_tests'] = [t for t in task['brief']['failing_tests'] if t['name'] not in quarantined]
         fixer = DrivenFixer() if task['stage'] == 'FIXER' else None
         integrator = DrivenIntegrator() if task['stage'] == 'INTEGRATOR' else None
+        pending_fixer_action = None
+
+        def degrade_fixer(exc):
+            if (isinstance(exc, BudgetExceeded) or
+                    any(marker in str(exc).lower() for marker in
+                        ('circuit_breaker:', 'budget_exceeded', 'budget_stop')) or
+                    len(task['brief'].get('attempt_failures', [])) < 2):
+                raise exc
+            with store.transaction() as c:
+                stopped = store._meter_status(c, task)['stop']
+            if stopped:
+                raise RuntimeError('circuit_breaker:fixer_exhaustion_budget') from exc
+            return fixer.degraded(store, task, conf, str(exc), write_checkpoint)
+
         while True:
             store.assert_lease(task)
             if coder is not None and coder.current == 'check' and coder.unwritable and not coder.bodies:
@@ -360,19 +374,14 @@ async def run_task(engine, task):
                 store.event('tool_action', {'task': task['id'], 'generation': task['generation'],
                             'op': 'command', 'path_or_name': name, 'receipt': last})
             if fixer is not None:
-                try:
-                    action = await fixer.run(engine, task, plan, root, conf, ledger, manifest,
-                                             broker, write_checkpoint, storage_chunks, checkpoints, trusted_write, evidence)
-                except RuntimeError as exc:
-                    if (not str(exc).startswith('fixer_action_format_exhausted:') or
-                            len(task['brief'].get('attempt_failures', [])) < 2):
-                        raise
-                    # Hard caps retain priority even when the final response was malformed.
-                    with store.transaction() as c:
-                        stopped = store._meter_status(c, task)['stop']
-                    if stopped:
-                        raise RuntimeError('circuit_breaker:fixer_exhaustion_budget') from exc
-                    action = fixer.degraded(store, task, conf, str(exc), write_checkpoint)
+                if pending_fixer_action is not None:
+                    action, pending_fixer_action = pending_fixer_action, None
+                else:
+                    try:
+                        action = await fixer.run(engine, task, plan, root, conf, ledger, manifest,
+                                                 broker, write_checkpoint, storage_chunks, checkpoints, trusted_write, evidence)
+                    except RuntimeError as exc:
+                        action = degrade_fixer(exc)
             elif integrator is not None:
                 action = await integrator.run(engine, task, plan, root, conf, ledger, manifest,
                                               broker, write_checkpoint, storage_chunks, execute_command,
@@ -631,6 +640,7 @@ async def run_task(engine, task):
             if op == 'fail':
                 raise RuntimeError('honest_worker_failure:' + action['reason'])
             if op == 'finish':
+                engine._carry_over(root, task, conf, checkpoints)
                 stage_conf = conf
                 failed_deliverables = ([dict(path=p, error=error) for p, error in coder.unwritable.items()]
                                        if coder else action.get('failed_deliverables', []) if fixer else [])
@@ -673,7 +683,11 @@ async def run_task(engine, task):
                         raise
                     coder_handoff_errors += 1
                     if coder_handoff_errors >= 3:
-                        raise RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc) + '; template: ' + finish_template) from exc
+                        exhausted = RuntimeError(task['stage'].lower() + '_handoff_exhausted:' + str(exc) + '; template: ' + finish_template)
+                        if fixer is not None:
+                            pending_fixer_action = degrade_fixer(exhausted)
+                            continue
+                        raise exhausted from exc
                     finish_feedback = ('Correct readiness failure before finish: ' + str(exc) +
                                        '; finish requires summary and open_discrepancies; template: ' + finish_template)
                     last = finish_feedback

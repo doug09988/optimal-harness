@@ -63,7 +63,7 @@ def acceptance_feedback(root, plan, ledger):
 
 class DrivenFixer:
     def degraded(self, store, task, conf, reason, write):
-        """Final format exhaustion is a truthful handoff to the cycle gate."""
+        """Final FIXER exhaustion is a truthful handoff to the cycle gate."""
         state = store.load_fixer_progress(task) or {}
         items = state.get('items') or []
         applied = state.get('applied', {})
