@@ -532,7 +532,9 @@ async def run_task(engine, task):
                             coder.accept_plan(result.text, conf['writes'],
                                 [p for p in conf.get('deliverables', [])
                                  if p not in {cmd['capture'] for cmd in conf.get('commands', {}).values()}],
-                                dropped=lambda entry: store.event('plan_entry_dropped', entry))
+                                dropped=lambda entry: store.event('plan_entry_dropped', entry),
+                                repaired=lambda repair: store.event('plan_repaired', {
+                                    'task': task['id'], 'generation': task['generation'], **repair}))
                         elif current == 'check':
                             try:
                                 argv = coder.argv(result.text)

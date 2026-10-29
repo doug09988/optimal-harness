@@ -1,5 +1,6 @@
 """Bounded runtime-driven implementation authoring."""
 import json
+import re
 from .policy import PolicyError, normalized
 from .store import canonical
 from .prompt_budget import bounded, source_groups
@@ -104,21 +105,47 @@ class DrivenCoder:
             context += '\nSELF-CHECK ERROR TAIL:\n' + execution
         return CoderPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 
-    def accept_plan(self, text, allowed, required=(), dropped=None):
-        entries = []
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            path, sep, purpose = line.partition(' :: ')
-            if not sep or not purpose.strip():
-                raise PolicyError('plan requires path :: purpose, one per line')
-            entries.append((path.strip(), purpose.strip()))
-        plan = sanitize_plan(entries, allowed, dropped)
-        if not plan:
-            raise PolicyError('empty file plan')
-        plan = dict(list(plan.items())[:24])
-        if any(path not in plan for path in required):
-            raise PolicyError('plan must include required files: ' + ', '.join(required))
+    def accept_plan(self, text, allowed, required=(), dropped=None, repaired=None):
+        def strict(candidate, drops):
+            entries = []
+            for line in candidate.splitlines():
+                if not line.strip():
+                    continue
+                path, sep, purpose = line.partition(' :: ')
+                if not sep or not purpose.strip():
+                    raise PolicyError('plan requires path :: purpose, one per line')
+                entries.append((path.strip(), purpose.strip()))
+            plan = sanitize_plan(entries, allowed, drops.append)
+            if not plan:
+                raise PolicyError('empty file plan')
+            plan = dict(list(plan.items())[:24])
+            if any(path not in plan for path in required):
+                raise PolicyError('plan must include required files: ' + ', '.join(required))
+            return plan
+
+        drops = []
+        repair_kind = None
+        try:
+            plan = strict(text, drops)
+        except PolicyError as original:
+            # Insert only newlines, leaving purpose text and existing framing intact.
+            candidate = re.sub(r'(?<!\S)(\S+\.[A-Za-z][A-Za-z0-9]*)(?= :: )',
+                               r'\n\1', text)
+            repaired_drops = []
+            try:
+                plan = strict(candidate, repaired_drops)
+            except PolicyError:
+                if dropped is not None:
+                    for entry in drops:
+                        dropped(entry)
+                raise original
+            drops = repaired_drops
+            repair_kind = 'run_on_segmentation'
+        if dropped is not None:
+            for entry in drops:
+                dropped(entry)
+        if repair_kind is not None and repaired is not None:
+            repaired({'repair_kind': repair_kind})
         self.plan = plan
         self.feedback = ''
 

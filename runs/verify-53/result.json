@@ -1,0 +1,160 @@
+{
+  "project": [
+    {
+      "id": "wordcounter",
+      "status": "ESCALATED",
+      "cycle": 0,
+      "defect": "",
+      "repeats": 0,
+      "stage_attempts": [
+        {
+          "task": "821d92dd7ece404f",
+          "stage": "INTAKE",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "ee328ee09bd84ac7",
+          "stage": "REVIEW",
+          "cycle": 0,
+          "attempts": 1
+        },
+        {
+          "task": "f9139029d53540f9",
+          "stage": "CODER",
+          "cycle": 0,
+          "attempts": 3
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "821d92dd7ece404f",
+      "stage": "INTAKE",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/intake.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md"
+        ],
+        "permitted_writes": [
+          "artifacts/intake.json"
+        ],
+        "prior_stage": "",
+        "role": "INTAKE",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "ee328ee09bd84ac7",
+      "stage": "REVIEW",
+      "cycle": 0,
+      "status": "SUCCEEDED",
+      "failure": "",
+      "attempts": 1,
+      "brief": {
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "artifacts/review.json"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "artifacts/intake.json"
+        ],
+        "permitted_writes": [
+          "artifacts/review.json"
+        ],
+        "prior_stage": "INTAKE",
+        "role": "REVIEW",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": []
+    },
+    {
+      "id": "f9139029d53540f9",
+      "stage": "CODER",
+      "cycle": 0,
+      "status": "FAILED",
+      "failure": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line",
+      "attempts": 3,
+      "brief": {
+        "attempt_failures": [
+          {
+            "generation": 1,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+          },
+          {
+            "generation": 2,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+          },
+          {
+            "generation": 3,
+            "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+            "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+          }
+        ],
+        "budget": {},
+        "commands": [],
+        "deliverables": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "goal": "Implement a deterministic, spec-compliant word-frequency command-line tool.",
+        "notes_verbatim": "Counterexample-pass review of INTAKE handoff; your observations are evidence, never a verdict.",
+        "obligations": [],
+        "permitted_reads": [
+          "spec.md",
+          "fixtures/words.json"
+        ],
+        "permitted_writes": [
+          "wordfreq.py",
+          "test_unit.py"
+        ],
+        "prior_stage": "REVIEW",
+        "role": "CODER",
+        "spec_pointer": "spec.md"
+      },
+      "attempt_failures": [
+        {
+          "generation": 1,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+        },
+        {
+          "generation": 2,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+        },
+        {
+          "generation": 3,
+          "last_context": "New run. Write deliverables, then finish with summary and open_discrepancies.",
+          "reason": "coder_action_format_exhausted:plan; plan requires path :: purpose, one per line"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "valid": true,
+    "events": 85,
+    "head": "68bfb26c704a4dd8245bd2ebd757e3254df88a71431c4b9d218ffa3126bc484d"
+  },
+  "integrity_errors": []
+}

@@ -4,6 +4,7 @@ import json
 import unittest
 from unittest.mock import patch
 from optimal_harness.coder import DrivenCoder
+from optimal_harness.policy import PolicyError
 from optimal_harness.engine import make_brief
 from optimal_harness.model import Completion
 from optimal_harness.runtime import model_side_failure
@@ -213,6 +214,68 @@ class CoderTests(unittest.TestCase):
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual((self.root/'test_unit.py').read_text(), '# remaining')
         self.assertEqual(self.engine.queue.calls, 5)
+
+    def test_run_on_plan_matches_multiline_and_discloses_repair(self):
+        lines = [
+            'wordfreq.py :: implementation of the word frequency counter CLI tool',
+            'test_unit.py :: unit tests for the word frequency counter implementation',
+            'test_acceptance.py :: acceptance tests for the word frequency counter CLI tool',
+        ]
+        paths = ['wordfreq.py', 'test_unit.py', 'test_acceptance.py']
+        strict = DrivenCoder()
+        strict.accept_plan('\n'.join(lines), paths, paths)
+        coder = DrivenCoder()
+        events = []
+        coder.accept_plan(' '.join(lines), paths, paths, repaired=events.append)
+        self.assertEqual(list(coder.plan.items()), list(strict.plan.items()))
+        self.assertEqual(events, [{'repair_kind': 'run_on_segmentation'}])
+        task = self.run_driven([' '.join(lines[:2]), '# impl', '# tests', '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        with self.store.transaction() as c:
+            recorded = [json.loads(row[0]) for row in c.execute(
+                "SELECT payload FROM events WHERE kind='plan_repaired'")]
+        self.assertEqual(recorded, [{'task': task['id'], 'generation': 1,
+                                    'repair_kind': 'run_on_segmentation'}])
+
+    def test_strict_plan_does_not_disclose_repair(self):
+        task = self.run_driven([self.file_plan, '# impl', '# tests', '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute(
+                "SELECT count(*) FROM events WHERE kind='plan_repaired'").fetchone()[0], 0)
+        # Even a path-like boundary in a purpose stays untouched if strict parsing succeeds.
+        coder = DrivenCoder()
+        events = []
+        text = 'wordfreq.py :: mention notes.md :: details'
+        coder.accept_plan(text, ['wordfreq.py'], repaired=events.append)
+        self.assertEqual(coder.plan, {'wordfreq.py': 'mention notes.md :: details'})
+        self.assertEqual(events, [])
+
+    def test_failed_plan_resegmentation_preserves_original_error(self):
+        for text, error in (
+                ('wordfreq.py :: implementation test_unit.py :: ',
+                 'plan must include required files: wordfreq.py, test_unit.py'),
+                ('wordfreq.py implementation test_unit.py tests',
+                 'plan requires path :: purpose, one per line'),
+                ('wordfreq.py :: implementation test_unit.py :: tests\nbroken',
+                 'plan requires path :: purpose, one per line')):
+            with self.subTest(text=text):
+                coder = DrivenCoder()
+                events = []
+                with self.assertRaises(PolicyError) as caught:
+                    coder.accept_plan(text, ['wordfreq.py', 'test_unit.py'],
+                                      ['wordfreq.py', 'test_unit.py'], repaired=events.append)
+                self.assertEqual(str(caught.exception), error)
+                self.assertIsNone(coder.plan)
+                self.assertEqual(events, [])
+
+    def test_resegmentation_preserves_nonpath_separator_and_purpose_text(self):
+        coder = DrivenCoder()
+        paths = ['wordfreq.py', 'test_unit.py']
+        coder.accept_plan('wordfreq.py :: implementation  label :: detail ☃  '
+                          'test_unit.py :: tests', paths, paths)
+        self.assertEqual(coder.plan, {
+            'wordfreq.py': 'implementation  label :: detail ☃', 'test_unit.py': 'tests'})
 
     def test_plan_reask_scope_and_cap(self):
         def corrected(prompt):
