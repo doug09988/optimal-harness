@@ -374,7 +374,11 @@ class Engine:
     def _restore_artifact(self, project, root, best):
         # Publish restored references as the latest checkpoints too, so integrity
         # checks and the project deliverable agree with the working bytes.
-        snapshot = best['snapshot']
+        declared = {path for conf in self.store.project(project)['plan']['stages'].values()
+                    for path in conf.get('deliverables', [])}
+        present = set(best.get('present_deliverables', declared))
+        snapshot = [cp for cp in best['snapshot']
+                    if cp['path'] not in declared or cp['path'] in present]
         data = [(cp, confined(root, cp['archive']).read_bytes()) for cp in snapshot]
         if any(hashlib.sha256(body).hexdigest() != cp['sha256'] for cp, body in data):
             raise PolicyError('best artifact checkpoint archive tampered')
@@ -421,8 +425,15 @@ class Engine:
             return
         from .failures import fingerprint as defect_fingerprint
         fingerprint = defect_fingerprint(failures, root)
+        declared = {path for conf in plan['stages'].values()
+                    for path in conf.get('deliverables', [])}
+        present = {path for path in declared
+                   if confined(root, path).is_file() and confined(root, path).stat().st_size > 0}
+        previous_best = self.store.best_artifact(project)
+        growth = (previous_best is not None and
+                  bool(present - set(previous_best.get('present_deliverables', []))))
         best, regression = self.store.record_evaluation(
-            project, count, fingerprint, failures, self._artifact_snapshot(project, plan))
+            project, count, fingerprint, failures, self._artifact_snapshot(project, plan), present)
         if regression:
             self._restore_artifact(project, root, best)
         if result["passed"] and result["open_discrepancies"] == 0:
@@ -436,8 +447,8 @@ class Engine:
                      f"regressed failure count: {count}. Best artifact restored.\n"
                      + "\n".join(best['failures']))
         repeated = self.store.project(project).get("defect") == fingerprint
-        cycle, repeats = self.store.failure_cycle(project, fingerprint)
-        if repeats >= 3:
+        cycle, repeats = self.store.failure_cycle(project, fingerprint, count_defect=not growth)
+        if not growth and repeats >= 3:
             if not regression:
                 self._restore_artifact(project, root, best)
             self.store.project_status(project, "ESCALATED", "three failed cycles on same defect: " + notes)

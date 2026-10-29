@@ -393,14 +393,19 @@ class Store:
             row = c.execute("SELECT body FROM artifact_best WHERE project=?", (project,)).fetchone()
             return json.loads(row['body']) if row else None
 
-    def record_evaluation(self, project, failure_count, fingerprint, failures, snapshot):
-        """Retain checkpoint references only, and replace the best strictly on improvement."""
+    def record_evaluation(self, project, failure_count, fingerprint, failures, snapshot,
+                          present_deliverables=None):
+        """Retain checkpoints; compare counts only within a deliverable baseline."""
         candidate = dict(failure_count=failure_count, fingerprint=fingerprint,
                          failures=failures, snapshot=snapshot)
+        if present_deliverables is not None:
+            candidate['present_deliverables'] = sorted(present_deliverables)
         with self.transaction() as c:
             row = c.execute("SELECT body FROM artifact_best WHERE project=?", (project,)).fetchone()
             best = json.loads(row['body']) if row else None
-            if best is None or failure_count < best['failure_count']:
+            growth = (best is not None and present_deliverables is not None and
+                      bool(set(present_deliverables) - set(best.get('present_deliverables', []))))
+            if best is None or growth or failure_count < best['failure_count']:
                 best = candidate
                 c.execute("INSERT OR REPLACE INTO artifact_best VALUES(?,?)", (project, canonical(best)))
             regression = failure_count > best['failure_count']
@@ -409,11 +414,13 @@ class Store:
                         status='REGRESSION' if regression else 'EVALUATED'))
             return best, regression
 
-    def failure_cycle(self, project: str, defect: str) -> tuple[int, int]:
+    def failure_cycle(self, project: str, defect: str, *, count_defect=True) -> tuple[int, int]:
         with self.transaction() as c:
             row = c.execute("SELECT cycle,defect,repeats FROM projects WHERE id=?", (project,)).fetchone()
-            c.execute("INSERT INTO defect_counts(project,defect,repeats) VALUES(?,?,1) ON CONFLICT(project,defect) DO UPDATE SET repeats=repeats+1", (project,defect))
-            n = c.execute("SELECT repeats FROM defect_counts WHERE project=? AND defect=?", (project,defect)).fetchone()["repeats"]
+            if count_defect:
+                c.execute("INSERT INTO defect_counts(project,defect,repeats) VALUES(?,?,1) ON CONFLICT(project,defect) DO UPDATE SET repeats=repeats+1", (project,defect))
+            prior = c.execute("SELECT repeats FROM defect_counts WHERE project=? AND defect=?", (project,defect)).fetchone()
+            n = prior["repeats"] if prior else 0
             cycle = row["cycle"] + 1
             c.execute("UPDATE projects SET cycle=?,defect=?,repeats=? WHERE id=?", (cycle, defect, n, project))
             self._event(c, "failed_cycle", {"project": project, "cycle": cycle, "defect": defect, "repeats": n})

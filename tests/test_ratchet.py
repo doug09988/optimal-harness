@@ -72,6 +72,68 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(p['best_artifact'], best)
         self.assertEqual((self.root / 'wordfreq.py').read_text(), 'original')
 
+    def test_declared_growth_moves_baseline_without_increment_then_clock_resumes(self):
+        landed = self.root / 'test_unit.py'
+        landed.unlink(missing_ok=True)
+        first = self.evaluate(6, 'original')
+        self.assertNotIn('test_unit.py', first['best_artifact']['present_deliverables'])
+        landed.write_text('new suite')
+        grown = self.evaluate(12, 'landed')
+        self.assertEqual(grown['cycle'], first['cycle'] + 1)
+        self.assertEqual(grown['repeats'], 0)
+        self.assertEqual(grown['best_artifact']['failure_count'], 12)
+        self.assertIn('test_unit.py', grown['best_artifact']['present_deliverables'])
+        self.assertEqual((self.root / 'wordfreq.py').read_text(), 'landed')
+        for repeats in (1, 2):
+            flat = self.evaluate(12, 'landed')
+            self.assertEqual(flat['repeats'], repeats)
+            self.assertNotEqual(flat['status'], 'ESCALATED')
+        self.assertEqual(self.evaluate(12, 'landed')['status'], 'ESCALATED')
+
+    def test_restore_older_best_preserves_deliverable_landed_after_best(self):
+        landed = self.root / 'test_unit.py'
+        landed.write_text('')
+        # An empty deliverable can have an old checkpoint, but is absent
+        # from the gate's present set and must not be restored later.
+        import hashlib
+        sha = hashlib.sha256(b'').hexdigest()
+        archive = 'vault/checkpoints/' + sha + '.blob'
+        (self.root / archive).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / archive).write_bytes(b'')
+        with self.store.transaction() as c:
+            self.store.checkpoint(c, dict(id='empty', generation=1, project_id='wordcounter'),
+                                  'test_unit.py', sha, archive)
+        best = self.evaluate(6, 'original')['best_artifact']
+        self.assertTrue(any(cp['path'] == 'test_unit.py' for cp in best['snapshot']))
+        self.assertNotIn('test_unit.py', best['present_deliverables'])
+        landed.write_text('new suite')
+        sha = hashlib.sha256(landed.read_bytes()).hexdigest()
+        archive = 'vault/checkpoints/' + sha + '.blob'
+        (self.root / archive).write_bytes(landed.read_bytes())
+        with self.store.transaction() as c:
+            self.store.checkpoint(c, dict(id='new', generation=1, project_id='wordcounter'),
+                                  'test_unit.py', sha, archive)
+        self.evaluate(12, 'landed')
+        self.engine._restore_artifact('wordcounter', self.root, best)
+        self.assertEqual(landed.read_text(), 'new suite')
+        self.assertEqual((self.root / 'wordfreq.py').read_text(), 'original')
+        self.assertEqual(self.engine.integrity_errors('wordcounter', self.root), [])
+
+    def test_undeclared_file_does_not_exempt_regression(self):
+        best = self.evaluate(6, 'original')['best_artifact']
+        (self.root / 'stray.py').write_text('stray')
+        regressed = self.evaluate(12, 'regressed')
+        self.assertEqual(regressed['best_artifact'], best)
+        self.assertEqual(regressed['repeats'], 2)
+        self.assertEqual((self.root / 'wordfreq.py').read_text(), 'original')
+
+    def test_empty_declared_deliverable_does_not_exempt_regression(self):
+        landed = self.root / 'test_unit.py'
+        landed.unlink(missing_ok=True)
+        best = self.evaluate(6, 'original')['best_artifact']
+        landed.write_text('')
+        self.assertEqual(self.evaluate(12, 'regressed')['best_artifact'], best)
+
     def test_bundled_acceptance_failures_count_individual_failures_and_errors(self):
         self.assertEqual(Engine._failure_count([
             dict(passed=False, error='independent acceptance failed: FAILED (failures=9, errors=2)'),
