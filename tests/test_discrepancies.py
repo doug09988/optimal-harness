@@ -8,7 +8,9 @@ from tests import test_fixer as fixer_tests
 
 
 class DiscrepancyTests(unittest.TestCase):
-    setUp = runtime_tests.RuntimeTests.setUp
+    def setUp(self):
+        runtime_tests.RuntimeTests.setUp(self)
+        (self.root / 'artifacts').mkdir(parents=True, exist_ok=True)
     submit = runtime_tests.RuntimeTests.submit
 
     def ready(self, stage, texts):
