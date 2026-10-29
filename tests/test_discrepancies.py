@@ -95,7 +95,9 @@ class DiscrepancyTests(unittest.TestCase):
 
 
 class DrivenClosureTests(unittest.TestCase):
-    setUp = runtime_tests.RuntimeTests.setUp
+    def setUp(self):
+        runtime_tests.RuntimeTests.setUp(self)
+        (self.root / 'artifacts').mkdir(parents=True, exist_ok=True)
     submit = runtime_tests.RuntimeTests.submit
     setup_task = fixer_tests.FixerTests.setup_task
     attempt = fixer_tests.FixerTests.attempt
