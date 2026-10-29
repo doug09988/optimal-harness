@@ -19,7 +19,7 @@ def quarantines(store, project):
 
 def failures(text):
     # unittest's qualified identity distinguishes classes and parameterized subtests.
-    pattern = r'^(?:FAIL|ERROR): (test_\w+[^\n]*)\n[-]+\n(.*?)(?=\n[=]{10,}|\n[-]{10,}\nRan |\Z)'
+    pattern = r'^(?:FAIL|ERROR): (test_\w+[^\n]*)\n(?:[^\n]+\n)*?[-]+\n(.*?)(?=\n[=]{10,}|\n[-]{10,}\nRan |\Z)'
     return {m.group(1).strip(): m.group(2).strip()
             for m in re.finditer(pattern, text, re.M | re.S)}
 

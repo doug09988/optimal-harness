@@ -76,6 +76,30 @@ class AdjudicationTests(unittest.TestCase):
         self.assertEqual(len(self.responses), 1)
         self.assertIn('do not chase', a.notes(self.store, 'p'))
 
+    def test_qa_docstring_failure_reaches_tracker_and_eligibility(self):
+        from optimal_harness.qa import DrivenQA
+        qa = DrivenQA()
+        qa.accept('test_order')
+        qa.accept('def test_order(self):\n    """Check the specified ordering."""\n    self.assertTrue(False)')
+        (self.root / 'test_public.py').write_text(qa.assembly())
+        name = 'test_order (test_public.AcceptanceTests)'
+        text = ('=' * 70 + '\nFAIL: ' + name + '\nCheck the specified ordering.\n' +
+                '-' * 70 + '\nAssertionError: False is not true\n\n' + '-' * 70 +
+                '\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n')
+        receipt = dict(stdout='', stderr=text, exit_code=1, reason='exited')
+        (self.root / 'suite.json').write_text(json.dumps(receipt))
+        for cycle in (1, 2):
+            with patch.object(self.store, 'project', return_value={'cycle': cycle}):
+                result = dict(passed=False, open_discrepancies=1,
+                              results=[dict(passed=False, error='suite is not green')])
+                a.account(self.engine, 'p', self.plan, self.root,
+                          [dict(type='command_receipt', path='suite.json')], result)
+            self.assertEqual(list(result['suite_reports'][0]['failed']), [name])
+        self.run_review()
+        self.assertEqual(len(self.responses), 1)
+        self.assertEqual(self.responses[0]['test'], name)
+        self.assertIn('AssertionError', self.responses[0]['failure'])
+
     def test_nonconsecutive_and_wrong_next_cycle(self):
         for cycles in ((0, 2), (0, 1)):
             self.store.events.clear()

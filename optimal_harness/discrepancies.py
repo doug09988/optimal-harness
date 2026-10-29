@@ -10,6 +10,48 @@ def identity(text):
     return hashlib.sha256(' '.join(text.casefold().split()).encode()).hexdigest()
 
 
+def anchor(text):
+    match = re.search(r'`(test_\w+)`', text)
+    return match[1] if match else None
+
+
+def inherit(store, project, opened, ledger):
+    """Persist anchors so closures survive replacement of the originating handoff."""
+    with store.transaction() as c:
+        observed, quarantined = {}, {}
+        for row in c.execute("SELECT seq,kind,payload FROM events WHERE kind IN "
+                             "('discrepancy_anchor_observed','test_quarantined') ORDER BY seq"):
+            payload = json.loads(row['payload'])
+            if payload.get('project') != project:
+                continue
+            if row['kind'] == 'discrepancy_anchor_observed':
+                observed[payload['identity']] = payload['anchor']
+            elif row['kind'] == 'test_quarantined':
+                quarantined.setdefault(payload['test'].split()[0],
+                                       dict(event='test_quarantined', seq=row['seq']))
+        closed = {}
+        for key, entry in sorted(ledger.items()):
+            if entry.get('disposition') == 'CLOSE' and key in observed:
+                closed.setdefault(observed[key], dict(identity=key, disposition='CLOSE',
+                                                     note=entry['note']))
+        for key, text in opened.items():
+            name = anchor(text)
+            if name is None:
+                continue
+            if key not in observed:
+                store._event(c, 'discrepancy_anchor_observed',
+                             dict(project=project, identity=key, anchor=name))
+            evidence = quarantined.get(name) or closed.get(name)
+            if evidence is None or ledger.get(key, {}).get('disposition') == 'CLOSE':
+                continue
+            entry = dict(identity=key, disposition='CLOSE', anchor=name,
+                         note='Inherited closure for `' + name + '`', evidence=evidence)
+            store._event(c, 'discrepancy_inherited_closure', dict(project=project, **entry))
+            c.execute('INSERT OR REPLACE INTO discrepancy_resolutions VALUES(?,?,?)',
+                      (project, key, json.dumps(entry)))
+            ledger[key] = entry
+
+
 def current(review, handoffs):
     texts = list(review.get('unresolved', []))
     for doc in handoffs:
@@ -64,6 +106,7 @@ def snapshot(store, project, root, plan):
     review_path = confined(root, 'artifacts/review.json')
     review = json.loads(review_path.read_text()) if review_path.is_file() else {}
     opened = current(review, latest.values())
+    inherit(store, project, opened, ledger)
     cycle = store.project(project)['cycle']
     cycle_tasks = {t['id'] for t in store.tasks(project)
                    if t['cycle'] == cycle and t['status'] == 'SUCCEEDED'}
@@ -82,7 +125,7 @@ def snapshot(store, project, root, plan):
     stale = []
     for key, text in opened.items():
         match = re.search(r'\b(test_\w+)\s*:\s*unwritable\b', text, re.I)
-        if match and match[1].casefold() in names:
+        if match and match[1].casefold() in names and ledger.get(key, {}).get('disposition') != 'CLOSE':
             stale.append(dict(identity=key, disposition='STALE', note=names[match[1].casefold()] + ':' + match[1]))
     record(store, project, stale)
     ledger.update({e['identity']: e for e in stale})

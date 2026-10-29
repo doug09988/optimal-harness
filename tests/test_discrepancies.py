@@ -20,6 +20,45 @@ class DiscrepancyTests(unittest.TestCase):
         self.store.handoff(task, {'status': 'ready', 'open_discrepancies': texts})
         self.store.finish(task, 'SUCCEEDED')
 
+    def anchored_snapshot(self, texts):
+        (self.root / 'artifacts/review.json').write_text(json.dumps({'unresolved': texts}))
+        return snapshot(self.store, 'wordcounter', self.root,
+                        self.store.project('wordcounter')['plan'])
+
+    def test_quarantine_inheritance_survives_rewording_and_is_idempotent(self):
+        self.submit()
+        self.store.event('test_quarantined', dict(project='wordcounter', suite='reports/qa.json',
+                         test='test_case (test_acceptance.AcceptanceTests)'))
+        for text in ('`test_case` expects 2 occurrences', '`test_case` expects two entries'):
+            items = self.anchored_snapshot([text])
+            self.assertEqual(live(items), [])
+            self.assertEqual(items[0]['evidence']['event'], 'test_quarantined')
+            self.anchored_snapshot([text])
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='discrepancy_inherited_closure'").fetchone()[0], 2)
+        self.assertEqual(self.engine._discrepancy_checks('wordcounter'), [])
+
+    def test_prior_closure_inherits_after_original_disappears(self):
+        self.submit()
+        original = '`test_case` expects 2 occurrences'
+        self.anchored_snapshot([original])
+        record(self.store, 'wordcounter', [dict(identity=identity(original), disposition='CLOSE',
+                                              note='SPEC: expectation contradicts ordering')])
+        items = self.anchored_snapshot(['A different expectation for `test_case`'])
+        self.assertEqual(live(items), [])
+        self.assertEqual(items[0]['evidence']['identity'], identity(original))
+
+    def test_first_anchor_only_and_unanchored_remain_open(self):
+        self.submit()
+        self.store.event('test_quarantined', dict(project='other', test='test_open'))
+        self.store.event('test_quarantined', dict(project='wordcounter', test='test_closed'))
+        texts = ['`test_open` and `test_closed` disagree', 'test_closed without backticks',
+                 'An unrelated gap']
+        items = self.anchored_snapshot(texts)
+        self.assertEqual(len(live(items)), 3)
+        self.assertTrue(all('disposition' not in item for item in items))
+        self.assertEqual(len(self.engine._discrepancy_checks('wordcounter')), 3)
+
     def test_verify31_fixture(self):
         # 55 primary-record entries, duplicated generation errors and prose,
         # plus the one live case-sensitivity dispute; no obligations required.
