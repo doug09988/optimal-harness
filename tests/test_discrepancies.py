@@ -59,6 +59,41 @@ class DiscrepancyTests(unittest.TestCase):
         self.assertTrue(all('disposition' not in item for item in items))
         self.assertEqual(len(self.engine._discrepancy_checks('wordcounter')), 3)
 
+    def test_unanchored_paraphrases_merge_and_inherit_durable_closure(self):
+        self.submit()
+        first = 'The test suite does not cover cases with empty input arrays'
+        second = 'The test suite does not cover empty input arrays'
+        other = 'Output sorting violates Unicode code point ordering'
+        items = self.anchored_snapshot([first, second, other])
+        self.assertEqual(len(live(items)), 2)
+        representative = next(item for item in items if item['text'] != other)
+        record(self.store, 'wordcounter', [dict(identity=representative['identity'], disposition='CLOSE', note='Coverage verified')])
+        replacement = second if representative['text'] == first else first
+        items = self.anchored_snapshot([replacement, other])
+        self.assertEqual([item['text'] for item in live(items)], [other])
+        self.assertEqual(next(item for item in items if item['text'] == replacement)['evidence']['identity'], representative['identity'])
+        self.anchored_snapshot([replacement, other])
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM events WHERE kind='discrepancy_paraphrase_closed'").fetchone()[0], 1)
+
+    def test_paraphrase_threshold_tokens_and_anchor_exclusion(self):
+        from optimal_harness.discrepancies import content_tokens
+        self.assertEqual(content_tokens('The EMPTY input 123 012345abcdef'), {'empty', 'input'})
+        self.submit()
+        # Three shared tokens out of five is exactly the inclusive threshold.
+        self.assertEqual(len(live(self.anchored_snapshot(['empty input coverage cases', 'empty input coverage suite']))), 1)
+        self.assertEqual(len(self.anchored_snapshot(['empty input coverage cases', 'empty input coverage sorting order'])), 2)
+        texts = ['`test_one` empty input coverage', '`test_two` empty input coverage', 'empty input coverage']
+        self.assertEqual(len(live(self.anchored_snapshot(texts))), 3)
+        record(self.store, 'wordcounter', [dict(identity=identity(texts[0]), disposition='CLOSE', note='Resolved')])
+        self.assertEqual(len(live(self.anchored_snapshot(texts))), 2)
+
+    def test_paraphrase_history_scoped_to_project_and_empty_tokens_distinct(self):
+        self.submit()
+        self.store.event('discrepancy_text_observed', dict(project='other', identity='old', text='empty input coverage'))
+        record(self.store, 'wordcounter', [dict(identity='old', disposition='CLOSE', note='Other project wording')])
+        self.assertEqual(len(live(self.anchored_snapshot(['empty input coverage', '123', '456']))), 3)
+
     def test_verify31_fixture(self):
         # 55 primary-record entries, duplicated generation errors and prose,
         # plus the one live case-sensitivity dispute; no obligations required.

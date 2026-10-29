@@ -52,6 +52,56 @@ def inherit(store, project, opened, ledger):
             ledger[key] = entry
 
 
+# Keep concept words (including negations); discard only common connective words.
+_STOPWORDS = frozenset('a an the and or of to in on for with is are was were be been this that it its does do'.split())
+
+
+def content_tokens(text):
+    return {word for word in re.findall(r"\w+", text.lower())
+            if word not in _STOPWORDS and not word.isdecimal()
+            and not re.fullmatch(r'[0-9a-f]{8,}', word)}
+
+
+def paraphrases(store, project, opened, ledger):
+    """Remember unanchored wording and inherit CLOSE before merging live items."""
+    with store.transaction() as c:
+        observed = {}
+        for row in c.execute("SELECT payload FROM events WHERE kind='discrepancy_text_observed' ORDER BY seq"):
+            payload = json.loads(row['payload'])
+            if payload.get('project') == project:
+                observed[payload['identity']] = payload['text']
+        for key, text in opened.items():
+            if anchor(text) is None and key not in observed:
+                store._event(c, 'discrepancy_text_observed', dict(project=project, identity=key, text=text))
+                observed[key] = text
+        closed = [(key, content_tokens(text)) for key, text in sorted(observed.items())
+                  if anchor(text) is None and ledger.get(key, {}).get('disposition') == 'CLOSE']
+        representatives = []
+        merged = {}
+        for key, text in opened.items():
+            if anchor(text) is not None or ledger.get(key, {}).get('disposition') in ('CLOSE', 'STALE'):
+                continue
+            tokens = content_tokens(text)
+            def similar(other):
+                return bool(tokens | other) and len(tokens & other) / len(tokens | other) >= 0.6
+            evidence = next((other for other, words in closed if similar(words)), None)
+            if evidence is not None:
+                entry = dict(identity=key, disposition='CLOSE',
+                             note='Inherited closure for unanchored paraphrase',
+                             evidence=dict(identity=evidence, disposition='CLOSE', note=ledger[evidence]['note']))
+                store._event(c, 'discrepancy_paraphrase_closed', dict(project=project, **entry))
+                c.execute('INSERT OR REPLACE INTO discrepancy_resolutions VALUES(?,?,?)',
+                          (project, key, json.dumps(entry)))
+                ledger[key] = entry
+            else:
+                representative = next((other for other, words in representatives if similar(words)), None)
+                if representative is not None:
+                    merged[key] = merged.get(representative, representative)
+                # Include all current open wordings, even those already merged.
+                representatives.append((key, tokens))
+        return merged
+
+
 def current(review, handoffs):
     texts = list(review.get('unresolved', []))
     for doc in handoffs:
@@ -129,12 +179,13 @@ def snapshot(store, project, root, plan):
             stale.append(dict(identity=key, disposition='STALE', note=names[match[1].casefold()] + ':' + match[1]))
     record(store, project, stale)
     ledger.update({e['identity']: e for e in stale})
-    return [dict(identity=key, text=text, **{k: v for k, v in ledger.get(key, {}).items() if k != 'identity'})
+    merged = paraphrases(store, project, opened, ledger)
+    return [dict(identity=key, text=text, **({'merged_into': merged[key]} if key in merged else {}), **{k: v for k, v in ledger.get(key, {}).items() if k != 'identity'})
             for key, text in sorted(opened.items())]
 
 
 def live(items):
-    return [item for item in items if item.get('disposition') not in ('CLOSE', 'STALE')]
+    return [item for item in items if item.get('disposition') not in ('CLOSE', 'STALE') and 'merged_into' not in item]
 
 
 def resolutions(store, project):

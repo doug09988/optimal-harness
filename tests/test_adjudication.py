@@ -48,9 +48,9 @@ class AdjudicationTests(unittest.TestCase):
         self.responses = []
         async def request(prompt, cap, timeout):
             self.responses.append(json.loads(prompt))
-            return Completion(self.reply, 10, 0, 5)
+            return Completion(self.reply.pop(0) if isinstance(self.reply, list) else self.reply, 10, 0, 5)
         self.engine = SimpleNamespace(store=self.store, queue=SimpleNamespace(request=request))
-        self.reply = json.dumps(dict(verdict='TEST_WRONG', clause='ascending Unicode code-point order',
+        self.reply = json.dumps(dict(verdict='TEST_WRONG', violator='test', clause='ascending Unicode code-point order',
                                     derivation='Latin z precedes Greek alpha by code point.'))
 
     def gate(self, cycle, names=('test_order (test_public.Tests.test_order)',)):
@@ -99,6 +99,98 @@ class AdjudicationTests(unittest.TestCase):
         self.assertEqual(len(self.responses), 1)
         self.assertEqual(self.responses[0]['test'], name)
         self.assertIn('AssertionError', self.responses[0]['failure'])
+
+    def test_coherent_artifact_verdict_consumes_eligibility(self):
+        self.gate(1)
+        self.gate(2)
+        self.reply = json.dumps(dict(verdict='ARTIFACT_WRONG', violator='artifact'))
+        self.run_review()
+        self.run_review()
+        self.assertEqual(len(self.responses), 1)
+        self.assertFalse(a.quarantines(self.store, 'p'))
+        self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], 'ARTIFACT_WRONG')
+
+    def test_mismatch_retries_once_and_coherent_retry_lands(self):
+        for decision, wrong, right in (('TEST_WRONG', 'artifact', 'test'),
+                                       ('ARTIFACT_WRONG', 'test', 'artifact')):
+            with self.subTest(decision=decision):
+                self.store.events.clear()
+                self.responses.clear()
+                self.gate(1)
+                self.gate(2)
+                response = json.loads(self.reply) if isinstance(self.reply, str) else {}
+                response.update(verdict=decision, clause='ascending Unicode code-point order', derivation='Wrong order.')
+                self.reply = [json.dumps(dict(response, violator=wrong)),
+                              json.dumps(dict(response, violator=right))]
+                ledger = self.run_review()
+                self.assertEqual((ledger.calls, len(self.responses)), (2, 2))
+                self.assertIn('requires violator=' + right, self.responses[1]['retry_reason'])
+                self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], decision)
+                self.assertEqual(bool(a.quarantines(self.store, 'p')), decision == 'TEST_WRONG')
+                self.assertFalse(a.history(self.store, 'p', 'test_adjudication_incoherent'))
+                self.run_review()
+                self.assertEqual(len(self.responses), 2)
+
+    def test_persistent_mismatch_or_missing_preserves_later_eligibility(self):
+        for second in ({'verdict': 'ARTIFACT_WRONG', 'violator': 'test'},
+                       {'verdict': 'TEST_WRONG'}, {}):
+            with self.subTest(second=second):
+                self.store.events.clear()
+                self.responses.clear()
+                self.task['cycle'] = 3
+                self.gate(1)
+                self.gate(2)
+                self.reply = [json.dumps(dict(verdict='TEST_WRONG', violator='artifact')), json.dumps(second)]
+                self.run_review()
+                self.assertFalse(a.quarantines(self.store, 'p'))
+                event = a.history(self.store, 'p', 'test_adjudication_incoherent')[-1]
+                self.assertEqual(len(event['attempts']), 2)
+                self.assertEqual(a.history(self.store, 'p', 'test_adjudicated')[-1]['verdict'], 'UNCERTAIN')
+                self.run_review()
+                self.assertEqual(len(self.responses), 2)
+                self.gate(3)
+                self.task['cycle'] = 4
+                self.reply = json.dumps(dict(verdict='ARTIFACT_WRONG', violator='artifact'))
+                self.run_review()
+                self.assertEqual(len(self.responses), 3)
+                self.gate(4)
+                self.task['cycle'] = 5
+                self.run_review()
+                self.assertEqual(len(self.responses), 3)
+
+    def test_missing_violator_retries_and_coherent_retry_quarantines(self):
+        self.gate(1)
+        self.gate(2)
+        coherent = self.reply
+        missing = json.loads(coherent)
+        del missing['violator']
+        self.reply = [json.dumps(missing), coherent]
+        self.run_review()
+        self.assertEqual(len(self.responses), 2)
+        self.assertEqual(len(a.quarantines(self.store, 'p')), 1)
+
+    def test_incoherent_retries_keep_three_candidate_cycle_cap(self):
+        names = tuple('test_%d (test_public.Tests.test_%d)' % (i, i) for i in range(5))
+        self.gate(1, names)
+        self.gate(2, names)
+        self.reply = json.dumps(dict(verdict='ARTIFACT_WRONG', violator='test'))
+        ledger = self.run_review()
+        self.assertEqual((ledger.calls, self.store.charges), (6, 6))
+        self.assertEqual(len(a.history(self.store, 'p', 'test_adjudication_started')), 3)
+        self.run_review()
+        self.assertEqual(len(self.responses), 6)
+        self.assertFalse(a.quarantines(self.store, 'p'))
+
+    def test_malformed_response_retains_stage33_once_semantics(self):
+        self.gate(1)
+        self.gate(2)
+        self.reply = 'not JSON'
+        self.run_review()
+        self.gate(3)
+        self.task['cycle'] = 4
+        self.run_review()
+        self.assertEqual(len(self.responses), 1)
+        self.assertFalse(a.history(self.store, 'p', 'test_adjudication_incoherent'))
 
     def test_nonconsecutive_and_wrong_next_cycle(self):
         for cycles in ((0, 2), (0, 1)):
