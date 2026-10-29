@@ -69,8 +69,7 @@ class RealPipeline(unittest.TestCase):
             shutil.copytree(example/'work',root); shutil.copytree(example/'grader',grader)
             plan=json.loads((example/'plan.json').read_text())
             if deferred:
-                plan['stages']['FIXER']['writes'].append('test_unit.py')
-                plan['stages']['FIXER']['deliverables'] = ['test_unit.py']
+                plan['stages']['FIXER']['deliverables'] = []
             lines=[ln for ln in (root/'spec.md').read_text().splitlines() if ':' in ln]
             audit={'slots':{name:{'status':'citation','quote':line,'because':'Explicit requirement.'} for name,line in zip(LIFECYCLE,lines)}}
             def write(path,data): return {'action':'write','path':path,'data':data}
@@ -134,6 +133,13 @@ class RealPipeline(unittest.TestCase):
                         "SELECT payload FROM events WHERE kind='package_input_deferred'")]
                     failed = [json.loads(r[0]) for r in c.execute(
                         "SELECT payload FROM events WHERE kind='deliverable_failed'")]
+                with store.transaction() as c:
+                    extensions = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='fixer_allowlist_extended'")]
+                self.assertEqual(len(extensions), 1)
+                self.assertEqual(extensions[0]['paths'], ['test_unit.py'])
+                self.assertEqual(extensions[0]['cycle'], 1)
+                self.assertNotIn('test_unit.py', store.project('wordcounter')['plan']['stages']['FIXER']['writes'])
                 self.assertEqual(len(events), 1)
                 self.assertEqual(events[0]['path'], 'test_unit.py')
                 self.assertEqual(events[0]['error'], failed[0]['error'])

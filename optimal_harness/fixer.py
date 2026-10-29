@@ -113,6 +113,19 @@ class DrivenFixer:
             plan['stages'].get('QA', {}).get('writes', []))
         allowed = set(conf.get('writes', []))
         runtime_paths = set(broker.writes) - allowed
+        # Only runtime-seeded repair targets in this cycle's brief extend policy;
+        # findings read from QA/review artifacts cannot grant write permission.
+        repair_paths = {normalized(path) for path, _ in
+                        structured_fixes(task['brief'].get('requested_changes', []))}
+        added = {path for path in repair_paths - protected
+                 if path not in allowed and not any(
+                     p.endswith('/**') and path.startswith(p[:-2]) for p in allowed)}
+        allowed.update(added)
+        broker.writes.update(added)
+        if added:
+            store.event('fixer_allowlist_extended', {
+                'task': task['id'], 'generation': task['generation'],
+                'cycle': task['cycle'], 'paths': sorted(added)})
 
         def validate(fixes):
             if not fixes:

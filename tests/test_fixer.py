@@ -15,8 +15,9 @@ class FixerTests(unittest.TestCase):
     setUp = runtime_tests.RuntimeTests.setUp
     submit = runtime_tests.RuntimeTests.submit
 
-    def setup_task(self, structured=True, protected=False):
-        self.plan['stages']['FIXER']['writes'].append('test_unit.py')
+    def setup_task(self, structured=True, protected=False, allow_unit=True):
+        if allow_unit:
+            self.plan['stages']['FIXER']['writes'].append('test_unit.py')
         self.plan['stages']['FIXER']['deliverables'] = []
         (self.root/'wordfreq.py').write_text('old implementation\n')
         (self.root/'test_unit.py').write_text('old unit tests\n')
@@ -46,6 +47,36 @@ class FixerTests(unittest.TestCase):
         with patch.object(self.engine, '_advance'):
             asyncio.run(self.engine.run_task(self.store.claim('worker', 60)))
         return self.store.tasks('wordcounter')[-1]
+
+    def test_cycle_repair_extension_does_not_leak_to_next_cycle(self):
+        self.setup_task(allow_unit=False)
+        task = self.attempt(['# implementation', 'def broken(', '```python\n# repaired unit\n```'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'test_unit.py').read_text(), '# repaired unit\n')
+        plan = self.store.project('wordcounter')['plan']
+        self.assertNotIn('test_unit.py', plan['stages']['FIXER']['writes'])
+        brief = make_brief('FIXER', plan, 'QA findings only', 'QA')
+        self.store.enqueue('wordcounter', 'FIXER', 2, brief)
+        (self.root/'reports').mkdir(exist_ok=True)
+        (self.root/'reports/qa.json').write_text(json.dumps({'findings': [
+            {'path': 'test_unit.py', 'change': 'not a cycle repair item'}]}))
+        task = self.attempt([])
+        self.assertIn('fix target not on declared write allowlist: test_unit.py', task['failure'])
+        self.assertEqual(len(self.calls), 3)
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='fixer_allowlist_extended'")]
+        self.assertEqual([(e['cycle'], e['paths']) for e in events], [(1, ['test_unit.py'])])
+
+    def test_artifact_finding_outside_brief_still_denied(self):
+        self.setup_task(allow_unit=False)
+        (self.root/'reports').mkdir(exist_ok=True)
+        (self.root/'reports/qa.json').write_text(json.dumps({'findings': [
+            {'path': 'other.py', 'change': 'not a brief repair target'}]}))
+        task = self.attempt([])
+        self.assertIn('fix target not on declared write allowlist: other.py', task['failure'])
+        self.assertFalse((self.root/'other.py').exists())
+        self.assertEqual(self.calls, [])
 
     def test_two_findings_exact_files_and_caps(self):
         self.setup_task()
