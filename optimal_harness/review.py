@@ -5,6 +5,24 @@ from .store import canonical
 SECTIONS = ('reviewed_stage', 'counterexamples', 'observations', 'unresolved')
 
 
+def parse_verdict(text):
+    """Prefer the JSON contract, retaining the legacy exact first-line rule."""
+    import json
+    try:
+        value = json.loads(text)
+    except ValueError:
+        value = None
+    if isinstance(value, dict):
+        verdict = value.get('verdict')
+        if verdict in ('APPROVE', 'REQUEST_CHANGES'):
+            return verdict, value.get('discrepancy_resolutions', [])
+    else:
+        lines = text.splitlines()
+        if lines and lines[0] in ('APPROVE', 'REQUEST_CHANGES'):
+            return lines[0], []
+    raise PolicyError('unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES')
+
+
 def section_template(path, section, prior_stage):
     examples = {'reviewed_stage': prior_stage,
                 'counterexamples': ['ATTEMPTED: inspect behavior for a missing input path'],
@@ -145,18 +163,7 @@ class DrivenReview:
         import json
         section = self.current
         if section == 'verdict':
-            entries = []
-            try:
-                value = json.loads(text)
-            except ValueError:
-                value = None
-            if isinstance(value, dict):
-                entries = value.get('discrepancy_resolutions', [])
-                text = value.get('verdict', '')
-            lines = text.splitlines() if isinstance(text, str) else []
-            if not lines or lines[0] not in ('APPROVE', 'REQUEST_CHANGES'):
-                raise PolicyError('unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES')
-            self.verdict = lines[0]
+            self.verdict, entries = parse_verdict(text)
             return {'action': 'finish', 'summary': 'Review of ' + repr(self.prior_stage) + ': ' + self.verdict,
                     'open_discrepancies': self.sections['unresolved'],
                     'discrepancy_resolutions': entries}

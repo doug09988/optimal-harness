@@ -704,6 +704,37 @@ class RuntimeTests(unittest.TestCase):
                                'attempt', '', '', 'APPROVE'], role='REVIEW')
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
 
+    def test_review_json_verdicts_record_resolutions_for_each_prior_stage(self):
+        from optimal_harness.discrepancies import identity, resolutions
+        for prior_stage in ('CODER', 'QA', 'INTEGRATOR'):
+            for indent in (None, 2):
+                with self.subTest(prior_stage=prior_stage, indent=indent):
+                    self.setUp()
+                    claim = 'superseded claim'
+                    (self.root/'artifacts').mkdir(exist_ok=True)
+                    (self.root/'artifacts/review.json').write_text(json.dumps({'unresolved': [claim]}))
+                    entry = dict(identity=identity(claim), disposition='STALE',
+                                 note='later review: test_case passes')
+                    payload = ' \n' + json.dumps(dict(verdict='REQUEST_CHANGES',
+                        discrepancy_resolutions=[entry]), indent=indent) + '\n '
+                    task = self.run_coder([prior_stage, 'ATTEMPTED: case', '', claim, payload],
+                                          role='REVIEW', prior_stage=prior_stage)
+                    self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+                    self.assertEqual(self.engine.queue.calls, 5)
+                    report = json.loads((self.root/'artifacts/review.json').read_text())
+                    self.assertEqual(report['verdict'], 'REQUEST_CHANGES')
+                    self.assertEqual(report['reviewed_stage'], prior_stage)
+                    self.assertEqual(resolutions(self.store, 'wordcounter'), [entry])
+                    self.assertEqual(self.engine._discrepancy_checks('wordcounter'), [])
+
+    def test_review_invalid_json_verdict_exhaustion(self):
+        task = self.run_coder(['""', 'attempt', '', '',
+                               '{"verdict":"APPROVE\\nextra"}',
+                               'Here is my verdict: APPROVE'], role='REVIEW')
+        self.assertIn('review_action_format_exhausted:verdict', task['failure'])
+        self.assertEqual(self.engine.queue.calls, 6)
+        self.assertFalse((self.root/'artifacts/review.json').exists())
+
     def test_review_verdict_reask(self):
         def corrected(prompt):
             self.assertIn('unparseable_verdict', prompt)
