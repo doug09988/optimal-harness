@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from .ledger import Ledger
@@ -86,6 +87,23 @@ def intake_document(data, source_read=None):
     return document
 
 
+def unwrap_python_fence(content):
+    """Remove only a leading markdown fence and its trailing bare closer."""
+    lines = content.splitlines(keepends=True)
+    if not lines:
+        return content
+    if re.fullmatch(r"```[A-Za-z0-9_+-]*", lines[0].strip()):
+        del lines[0]
+    elif content.startswith('```'):
+        lines[0] = re.sub(r"^```[A-Za-z0-9_+-]*", '', lines[0], count=1)
+    else:
+        return content
+    last = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip()), None)
+    if last is not None and lines[last].strip() == '```':
+        del lines[last]
+    return ''.join(lines)
+
+
 async def run_task(engine, task):
     store = engine.store
     project = store.project(task['project_id'])
@@ -157,6 +175,13 @@ async def run_task(engine, task):
             store.assert_lease(task)
             target = confined(root, path)
             old = target.read_bytes() if append and target.is_file() else b''
+            unwrapped = unwrap_python_fence(data)
+            if unwrapped != data:
+                data = unwrapped
+                if chunks is not None:
+                    chunks = storage_chunks(data)
+                store.event('write_repaired', {'task': task['id'],
+                            'generation': task['generation'], 'path': path})
             candidate = old + data.encode('utf-8')
             if len(candidate) > broker.max_bytes:
                 raise PolicyError(f'write total file size exceeds file limit of {broker.max_bytes} UTF-8 bytes')
@@ -166,7 +191,9 @@ async def run_task(engine, task):
                 reason = f'SyntaxError: {path}: line {exc.lineno}: {exc.msg}'
                 store.event('write_rejected', {'task': task['id'],
                             'generation': task['generation'], 'path': path,
-                            'error_line': exc.lineno, 'reason': reason})
+                            'error_line': exc.lineno, 'reason': reason,
+                            'first_line': candidate.decode('utf-8').splitlines()[0][:80]
+                            if candidate.splitlines() else ''})
                 raise PolicyError(reason) from exc
         def effect(c):
             count = None

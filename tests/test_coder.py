@@ -47,7 +47,7 @@ class CoderTests(unittest.TestCase):
             self.assertIn('line 1', prompt)
             self.assertFalse((self.root/'wordfreq.py').exists())
             return 'value = 1\n'
-        task = self.run_driven([self.file_plan, '```python\nvalue = 1\n```',
+        task = self.run_driven([self.file_plan, '```python\ndef broken(\n```',
                                 rewrite, '# tests', '[]'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual(self.engine.queue.calls, 5)
@@ -57,6 +57,43 @@ class CoderTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual((events[0]['path'], events[0]['error_line']), ('wordfreq.py', 1))
         compile((self.root/'wordfreq.py').read_bytes(), 'wordfreq.py', 'exec')
+
+    def test_python_fence_repair_preserves_inner_bytes(self):
+        inner = '#!/usr/bin/env python3\r\n# ☃  \r\nvalue = 1\r\n'
+        for opener in ('```\r\n', '```python\r\n', '```python'):
+            with self.subTest(opener=opener):
+                self.setUp()
+                task = self.run_driven([self.file_plan, opener + inner + '```\r\n\r\n',
+                                        '# tests', '[]'])
+                self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+                expected = (inner + '\r\n').encode()
+                self.assertEqual((self.root/'wordfreq.py').read_bytes(), expected)
+                compile(expected, 'wordfreq.py', 'exec')
+                with self.store.transaction() as c:
+                    events = [json.loads(r[0]) for r in c.execute(
+                        "SELECT payload FROM events WHERE kind='write_repaired'")]
+                self.assertEqual([event['path'] for event in events], ['wordfreq.py'])
+
+    def test_unfenced_python_is_unchanged_without_repair(self):
+        body = '# legitimate ```python later in line\r\nvalue = "```"\r\n'
+        task = self.run_driven([self.file_plan, body, '# tests', '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertEqual((self.root/'wordfreq.py').read_bytes(), body.encode())
+        with self.store.transaction() as c:
+            self.assertEqual(c.execute(
+                "SELECT count(*) FROM events WHERE kind='write_repaired'").fetchone()[0], 0)
+
+    def test_rejected_python_event_bounds_first_line(self):
+        bad = '# ' + 'x' * 100 + '\ndef broken('
+        task = self.run_driven([self.file_plan, '```python\n' + bad + '\n```',
+                                'value = 1', '# tests', '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='write_rejected'")]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['first_line'], bad.splitlines()[0][:80])
+        self.assertEqual(len(events[0]['first_line']), 80)
 
     def test_bad_python_exhausts_existing_file_retries(self):
         task = self.run_driven([self.file_plan, 'def broken(', 'if True', '# tests'])

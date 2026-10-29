@@ -68,7 +68,7 @@ class FixerTests(unittest.TestCase):
 
     def test_unfixed_continues_with_partial_success(self):
         self.setup_task()
-        task = self.attempt(['', '\x00', '```python\nbad\n```', '# fixed second'])
+        task = self.attempt(['', '\x00', '```python\ndef broken(\n```', '# fixed second'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual((self.root/'wordfreq.py').read_text(), 'old implementation\n')
         self.assertEqual((self.root/'test_unit.py').read_bytes(), b'# fixed second')
