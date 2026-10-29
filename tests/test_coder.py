@@ -96,12 +96,43 @@ class CoderTests(unittest.TestCase):
         self.assertEqual(len(events[0]['first_line']), 80)
 
     def test_bad_python_exhausts_existing_file_retries(self):
-        task = self.run_driven([self.file_plan, 'def broken(', 'if True', '# tests'])
+        task = self.run_driven([self.file_plan, 'def broken(', 'if True', 'def broken(', 'if True'])
         self.assertIn('coder_action_format_exhausted:unwritable', task['failure'])
-        self.assertEqual(self.engine.queue.calls, 4)
+        self.assertEqual(self.engine.queue.calls, 5)
         self.assertFalse((self.root/'wordfreq.py').exists())
         self.assertFalse(any(cp['path'] == 'wordfreq.py'
                              for cp in self.store.checkpoints('wordcounter')))
+
+    def test_partial_failure_seeds_next_fixer_with_final_error_context(self):
+        bad = '\n'.join(['# before'] * 5 + ['value = )'] + ['# after'] * 5)
+        def retry(prompt):
+            self.assertIn('3: # before', prompt)
+            self.assertIn('6: value = )', prompt)
+            self.assertIn('9: # after', prompt)
+            self.assertNotIn('2: # before', prompt)
+            self.assertNotIn('10: # after', prompt)
+            return bad
+        task = self.run_driven([self.file_plan, '# good', bad, retry, '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        self.assertFalse((self.root/'test_unit.py').exists())
+        with self.store.transaction() as c:
+            failures = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='deliverable_failed'")]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['stage'], 'CODER')
+        self.assertEqual(failures[0]['path'], 'test_unit.py')
+        brief = self.engine._fixer_brief('wordcounter', self.plan, 'gate failure', 'QA')
+        from optimal_harness.fixer import structured_fixes
+        items = structured_fixes(brief)
+        self.assertEqual(items[0][0], 'test_unit.py')
+        self.assertIn('SyntaxError:', items[0][1])
+        self.assertIn('6: value = )', items[0][1])
+        self.assertEqual(self.handoff()['deliverables'], ['wordfreq.py'])
+        # The unchanged verifier and gate still count a missing report.
+        from optimal_harness.verifier import Verifier
+        result = Verifier(self.root).verify([{'type': 'command_receipt', 'path': 'test_unit.py'}])
+        self.assertFalse(result['passed'])
+        self.assertEqual(self.engine._failure_count(result['results']), 1)
 
     def test_sanitized_plan_completes_without_retry(self):
         task = self.run_driven(['README.md :: docs\n./wordfreq.py :: implementation\n'
@@ -124,15 +155,14 @@ class CoderTests(unittest.TestCase):
         self.assertTrue(model_side_failure(task['failure']))
         self.assertEqual(self.engine.queue.calls, 2)
 
-    def test_unwritable_attempts_remaining_files_then_model_error(self):
+    def test_unwritable_attempts_remaining_files_then_completes(self):
         def remaining(prompt):
             self.assertIn('FILE: test_unit.py', prompt)
             return '# remaining'
-        task = self.run_driven([self.file_plan, '', '\x00', remaining])
-        self.assertIn('coder_action_format_exhausted:unwritable', task['failure'])
-        self.assertTrue(model_side_failure(task['failure']))
+        task = self.run_driven([self.file_plan, '', '\x00', remaining, '[]'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
         self.assertEqual((self.root/'test_unit.py').read_text(), '# remaining')
-        self.assertEqual(self.engine.queue.calls, 4)
+        self.assertEqual(self.engine.queue.calls, 5)
 
     def test_plan_reask_scope_and_cap(self):
         def corrected(prompt):

@@ -189,6 +189,11 @@ async def run_task(engine, task):
                 compile(candidate, path, 'exec')
             except SyntaxError as exc:
                 reason = f'SyntaxError: {path}: line {exc.lineno}: {exc.msg}'
+                lines = candidate.decode('utf-8').splitlines()
+                line = min(max(exc.lineno or 1, 1), len(lines))
+                context = '\n'.join(f'{n}: {lines[n-1][:400]}'
+                                    for n in range(max(1, line-3), min(len(lines), line+3)+1))
+                reason += '\nRejected content context (error line ±3):\n' + context
                 store.event('write_rejected', {'task': task['id'],
                             'generation': task['generation'], 'path': path,
                             'error_line': exc.lineno, 'reason': reason,
@@ -312,7 +317,7 @@ async def run_task(engine, task):
         integrator = DrivenIntegrator() if task['stage'] == 'INTEGRATOR' else None
         while True:
             store.assert_lease(task)
-            if coder is not None and coder.current == 'check' and coder.unwritable:
+            if coder is not None and coder.current == 'check' and coder.unwritable and not coder.bodies:
                 raise RuntimeError('coder_action_format_exhausted:unwritable; ' + canonical(coder.unwritable))
             if qa is not None and qa.current == 'report' and qa.execution is None:
                 target = next(p for p in conf['deliverables'] if p.endswith('test_acceptance.py'))
@@ -386,6 +391,8 @@ async def run_task(engine, task):
                     # REVIEW owns progression; no action-loop instructions enter its prompt.
                     sources = {path: source_read(path) for path in sorted(task['brief']['permitted_reads'])
                                if confined(root, path).is_file()}
+                    from .discrepancies import snapshot, live
+                    review.closure = live(snapshot(store, task['project_id'], root, plan))
                     prompt = review.prompt(review.section_sources(
                         sources, plan['stages'].get(review.prior_stage, {}).get('deliverables', [])))
                     manifest['static_prefix_sha256'] = hashlib.sha256(prompt.system_prefix.encode()).hexdigest()
@@ -492,11 +499,16 @@ async def run_task(engine, task):
                             coder.execution.append({'status': 'skipped', 'reason': str(exc)})
                             coder.phase = 'done'
                         else:
+                            was_failed = path in coder.unwritable if current.startswith('file:') else False
                             coder.reject(str(exc))
+                            if current.startswith('file:') and path in coder.unwritable and not was_failed:
+                                store.event('deliverable_failed', {'task': task['id'],
+                                    'generation': task['generation'], 'stage': task['stage'],
+                                    'path': path, 'error': str(exc)})
                     if coder.current == 'files':
                         coder.phase = 'check'
                     store.save_coder_progress(task, input_hash, coder.progress())
-                    if coder.current == 'check' and coder.unwritable:
+                    if coder.current == 'check' and coder.unwritable and not coder.bodies:
                         raise RuntimeError('coder_action_format_exhausted:unwritable; ' + canonical(coder.unwritable))
                     if coder.current != 'done':
                         continue
@@ -582,6 +594,9 @@ async def run_task(engine, task):
             if op == 'fail':
                 raise RuntimeError('honest_worker_failure:' + action['reason'])
             if op == 'finish':
+                stage_conf = conf
+                failed_deliverables = ([dict(path=p, error=error) for p, error in coder.unwritable.items()]
+                                       if coder else action.get('failed_deliverables', []) if fixer else [])
                 if partial:
                     raise RuntimeError('incomplete_chunked_files:' + ','.join(sorted(partial)))
                 try:
@@ -591,11 +606,23 @@ async def run_task(engine, task):
                             resolved = resolutions(action.get('obligation_resolutions', []),
                                                    plan.get('obligations', []),
                                                    action.get('open_discrepancies', []), source_read)
-                            document = compose_handoff(action, conf.get('deliverables', []), resolved)
+                            stage_conf = conf
+                            if coder is not None and coder.unwritable and coder.bodies:
+                                stage_conf = dict(conf, deliverables=[p for p in conf.get('deliverables', [])
+                                                                       if p not in coder.unwritable])
+                            document = compose_handoff(action, stage_conf.get('deliverables', []), resolved)
+                            if task['stage'] in ('FIXER', 'REVIEW'):
+                                from .discrepancies import snapshot, validated, record
+                                opened = snapshot(store, task['project_id'], root, plan)
+                                record(store, task['project_id'], validated(
+                                    action.get('discrepancy_resolutions', []),
+                                    {item['identity'] for item in opened}, task['stage']), task)
+                            if failed_deliverables:
+                                document['failed_deliverables'] = failed_deliverables
                         except (ValueError, PolicyError, OSError) as exc:
                             raise RuntimeError('handoff_not_ready_or_malformed:' + str(exc)) from exc
                         write_checkpoint(handoff, canonical(document) + '\n')
-                    engine._check_stage(root, task, conf, checkpoints, handoff)
+                    engine._check_stage(root, task, stage_conf if coder is not None else conf, checkpoints, handoff)
                 except RuntimeError as exc:
                     if (task['stage'] != 'CODER' and 'open_discrepancies' not in action and
                             str(exc).startswith('error:missing_deliverables:')):
@@ -614,7 +641,8 @@ async def run_task(engine, task):
                 manifest.update(status='succeeded', usage=ledger.totals())
                 trusted_write(manifest_path, (canonical(manifest)+'\n').encode())
                 store.handoff(task, {'status': 'ready', 'evidence': evidence, 'handoff': handoff,
-                                    'manifest': manifest_path, 'usage': ledger.totals(), 'budget_exceeded': False})
+                                    'manifest': manifest_path, 'usage': ledger.totals(), 'budget_exceeded': False,
+                                    'failed_deliverables': failed_deliverables})
                 store.finish(task, 'SUCCEEDED')
                 engine._advance(task, plan, root)
                 return

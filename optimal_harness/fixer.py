@@ -131,6 +131,13 @@ class DrivenFixer:
             store.save_fixer_progress(task, state)
 
         def budget(render, sources=None, evidence=None, target=None):
+            from .discrepancies import snapshot, live
+            work_items = live(snapshot(store, task['project_id'], root, plan))
+            if work_items:
+                original = render
+                def render(f, e, a):
+                    return FixerPrompt(str(original(f, e, a)) + '\nDISCREPANCY CLOSURE — WORK ITEMS\n' +
+                                       canonical(work_items))
             files, excerpts = source_groups(sources or {})
             excerpts.update(evidence or {})
             if 'failing_tests' in task['brief']:
@@ -260,6 +267,9 @@ class DrivenFixer:
                         break
             if key not in state['applied']:
                 state['unfixed'][key] = reason
+                store.event('deliverable_failed', {'task': task['id'],
+                            'generation': task['generation'], 'stage': task['stage'],
+                            'path': path, 'error': reason})
                 save()
         if not state['applied']:
             raise RuntimeError('fixer_action_format_exhausted:unfixed; ' + canonical(state['unfixed']))
@@ -284,7 +294,28 @@ class DrivenFixer:
             if report['status'] == 'failed':
                 return await self.run(engine, task, plan, root, conf, ledger, manifest,
                                       broker, write, chunks, checkpoints, trusted_write, evidence)
+        from .discrepancies import snapshot, live, validated, record
+        closure = live(snapshot(store, task['project_id'], root, plan))
+        if closure and not state.get('closure_done'):
+            text = await ask(FixerPrompt('DISCREPANCY CLOSURE\n' + canonical(closure) +
+                '\nCYCLE EVIDENCE:\n' + canonical({'applied': [item for i, item in enumerate(state['items'])
+                    if str(i) in state['applied']], 'hashes': state['hashes'],
+                    'acceptance_feedback': state.get('feedback', []), 'unfixed': state['unfixed']}) +
+                '\nDisposition every identity: CLOSE with an evidence note pointing to a file/test/result, '
+                'or KEEP with a reason; KEEP items are explicit work items for this cycle. '
+                'Reply with a JSON list of {identity, disposition, note}. Silence leaves items open.'), 2048)
+            try:
+                entries = json.loads(text)
+            except ValueError:
+                entries = []
+            accepted = validated(entries, {item['identity'] for item in closure})
+            record(store, task['project_id'], accepted, task)
+            state['closure_done'] = True
+            save()
+
         fixed = [item for index, item in enumerate(state['items']) if str(index) in state['applied']]
         return {'action': 'finish', 'summary': 'Applied requested fixes: ' + canonical(fixed),
+                'failed_deliverables': [dict(path=state['items'][int(key)][0], error=reason)
+                                        for key, reason in state['unfixed'].items()],
                 'open_discrepancies': [f'Item {key} ({state["items"][int(key)][0]}): {reason}'
                                        for key, reason in state['unfixed'].items()]}

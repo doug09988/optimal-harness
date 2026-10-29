@@ -77,6 +77,13 @@ class FixerTests(unittest.TestCase):
         self.assertIn('Item 0 (wordfreq.py)', handoff['open_discrepancies'][0])
         self.assertIn('SyntaxError: wordfreq.py: line 1', handoff['open_discrepancies'][0])
         self.assertEqual(len(self.calls), 4)
+        brief = self.engine._fixer_brief('wordcounter', self.plan, 'still failing', 'QA')
+        self.assertEqual(brief['requested_changes'][0]['path'], 'wordfreq.py')
+        self.assertIn('1: def broken(', brief['requested_changes'][0]['change'])
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='deliverable_failed'")]
+        self.assertEqual([(e['stage'], e['path']) for e in events], [('FIXER', 'wordfreq.py')])
 
     def test_python_syntax_rejection_keeps_previous_file_and_retries(self):
         self.setup_task()

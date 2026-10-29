@@ -202,6 +202,24 @@ class Engine:
                 raise RuntimeError("modified-after-checkpoint:" + path)
         self.store.event("stage_checks_passed", {"task": task["id"], "deliverables": checkpoints})
 
+    def _fixer_brief(self, project, plan, notes, source_stage):
+        brief = make_brief("FIXER", plan, notes, source_stage)
+        # Only failures since the preceding FIXER belong to its next cycle.
+        with self.store.transaction() as c:
+            rows = c.execute("SELECT h.body FROM handoffs h JOIN tasks t ON t.id=h.task "
+                             "WHERE t.project_id=? AND t.status='SUCCEEDED' AND t.rowid >= "
+                             "COALESCE((SELECT MAX(rowid) FROM tasks WHERE project_id=? "
+                             "AND stage='FIXER'), 0) ORDER BY t.rowid, h.generation",
+                             (project, project)).fetchall()
+        items = [dict(path=item['path'], change='Repair failed deliverable: ' + item['error'])
+                 for row in rows for item in json.loads(row['body']).get('failed_deliverables', [])]
+        if items:
+            brief['requested_changes'] = items
+        from .discrepancies import snapshot, live
+        p = self.store.project(project)
+        brief['discrepancy_closure'] = live(snapshot(self.store, project, Path(p['root']), plan))
+        return brief
+
     def _advance(self, task: dict, plan: dict, root: Path) -> None:
         role = task["stage"]
         if role == "REVIEW":
@@ -253,17 +271,11 @@ class Engine:
         return errors
 
     def _discrepancy_checks(self, project):
-        checks = []
-        cycle = self.store.project(project)['cycle']
-        tasks = {t['id']: t for t in self.store.tasks(project)
-                 if t['cycle'] == cycle and t['status'] == 'SUCCEEDED'}
-        for cp in self.store.checkpoints(project):
-            if cp['task'] in tasks and cp['path'].endswith('/handoff.json'):
-                checks.append({'type': 'obligation-discrepancy-free', 'path': cp['archive'], 'key': 'open_discrepancies',
-                               'obligations': self.store.project(project)['plan'].get('obligations', [])})
-            if cp['task'] in tasks and tasks[cp['task']]['stage'] == 'REVIEW' and cp['path'].endswith('.json') and not cp['path'].startswith('vault/'):
-                checks.append({'type': 'discrepancy-free', 'path': cp['archive'], 'key': 'unresolved'})
-        return checks
+        from .discrepancies import snapshot, live
+        p = self.store.project(project)
+        items = snapshot(self.store, project, Path(p['root']), p['plan'])
+        return [dict(type='discrepancy-live', identity=item['identity'], text=item['text'])
+                for item in live(items)]
 
     def _obligation_errors(self, project, plan, root):
         from .obligations import errors
@@ -347,7 +359,8 @@ class Engine:
             self.store.project_status(project, "ESCALATED", "pinned_spec_or_private_grader_changed")
             return
         private = Path(plan["private_grader_file"])
-        checks = json.loads(private.read_text())["checks"] + self._discrepancy_checks(project)
+        checks = [check for check in json.loads(private.read_text())["checks"]
+                  if check.get('type') not in ('discrepancy-free', 'obligation-discrepancy-free')] + self._discrepancy_checks(project)
         for role in ("INTEGRATOR", "QA"):
             for command in plan["stages"][role]["commands"].values():
                 checks.append({"type": "command_receipt", "path": command["capture"]})
@@ -356,6 +369,10 @@ class Engine:
         from .adjudication import account
         account(self, project, plan, root, checks, result)
         self._apply_obligations(result, project, plan, root)
+        from .discrepancies import snapshot, resolutions, live
+        result['discrepancy_closure'] = snapshot(self.store, project, root, plan)
+        result['discrepancy_resolutions'] = resolutions(self.store, project)
+        result['discrepancy_count'] = len(live(result['discrepancy_closure']))
         result["receipt_pointers"] = self._record_verifier_receipts(project, root, verifier.receipts)
         failures = list(dict.fromkeys(r["error"] for r in result["results"] if not r["passed"]))
         count = self._failure_count(result['results'])
@@ -389,7 +406,7 @@ class Engine:
                 self._restore_artifact(project, root, best)
             self.store.project_status(project, "ESCALATED", "three failed cycles on same defect: " + notes)
         else:
-            brief = make_brief("FIXER", plan, notes, "QA")
+            brief = self._fixer_brief(project, plan, notes, "QA")
             if repeated or regression:
                 from .test_source import attach
                 attach(brief, plan, root, best["failures"] if regression else failures)
@@ -409,7 +426,8 @@ class Engine:
             self.store.project_status(project, "ESCALATED", ";".join(errors))
             raise PolicyError("checkpoint integrity failed before grade")
         private = Path(p["plan"]["private_grader_file"])
-        checks = json.loads(private.read_text())["checks"] + self._discrepancy_checks(project)
+        checks = [check for check in json.loads(private.read_text())["checks"]
+                  if check.get('type') not in ('discrepancy-free', 'obligation-discrepancy-free')] + self._discrepancy_checks(project)
         for role in ("INTEGRATOR", "QA"):
             for command in p["plan"]["stages"][role]["commands"].values():
                 checks.append({"type": "command_receipt", "path": command["capture"]})
@@ -431,7 +449,7 @@ class Engine:
                 c.execute('UPDATE projects SET cycle=? WHERE id=?', (cycle, project))
             self.store.project_status(project, "RUNNING", "coordinator returned failed work")
             self.store.enqueue(project, "FIXER", cycle,
-                               make_brief("FIXER", p["plan"], notes, "COORDINATOR"))
+                               self._fixer_brief(project, p["plan"], notes, "COORDINATOR"))
 
     @staticmethod
     def _pins_intact(plan: dict, root: Path) -> bool:

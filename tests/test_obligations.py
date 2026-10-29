@@ -77,7 +77,9 @@ class ObligationTests(unittest.TestCase):
         fixture, plan = self.gate_fixture(True)
         self.assertEqual(fixture.store.project('wordcounter')['status'], 'AWAITING_COORDINATOR')
         checks = fixture.engine._discrepancy_checks('wordcounter')
-        self.assertTrue(Verifier(fixture.root).verify(checks)['passed'])
+        # Acknowledging an obligation satisfies that obligation, but Stage 35
+        # still counts its discrepancy until it receives an explicit disposition.
+        self.assertEqual(Verifier(fixture.root).verify(checks)['open_discrepancies'], 1)
         path = fixture.root/'other.json'
         path.write_text(json.dumps({'open_discrepancies': ['unrelated implementation bug']}))
         check = dict(checks[0], path='other.json')

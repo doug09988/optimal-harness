@@ -82,6 +82,9 @@ class Store:
                     task TEXT NOT NULL, generation INTEGER NOT NULL, body TEXT NOT NULL,
                     PRIMARY KEY(task,generation)
                 );
+                CREATE TABLE IF NOT EXISTS discrepancy_resolutions (
+                    project TEXT NOT NULL, identity TEXT NOT NULL, body TEXT NOT NULL,
+                    PRIMARY KEY(project, identity));
                 CREATE TABLE IF NOT EXISTS events (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL,
                     kind TEXT NOT NULL, payload TEXT NOT NULL,

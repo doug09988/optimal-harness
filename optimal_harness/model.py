@@ -332,6 +332,8 @@ def parse_action(text: str) -> dict:
         legal = legal | {"more"}
     if action['action'] == 'finish' and 'open_discrepancies' in action:
         legal = legal | {'open_discrepancies'}
+    if action['action'] == 'finish' and 'discrepancy_resolutions' in action:
+        legal = legal | {'discrepancy_resolutions'}
     if action['action'] == 'finish' and 'obligation_resolutions' in action:
         legal = legal | {'obligation_resolutions'}
     if action["action"] == "read":
@@ -343,7 +345,7 @@ def parse_action(text: str) -> dict:
         legal = set(action)
     if not {"action", "path"} <= set(action) and action["action"] == "read":
         raise ModelError("missing read path")
-    typed = legal - {"action", "offset", "length", "more", "open_discrepancies", "obligation_resolutions"}
+    typed = legal - {"action", "offset", "length", "more", "open_discrepancies", "obligation_resolutions", "discrepancy_resolutions"}
     if action["action"] == "write" and isinstance(action.get("data"), (dict, list)):
         typed -= {"data"}
     if set(action) != legal or any(not isinstance(action[k], str) for k in typed):

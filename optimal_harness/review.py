@@ -62,6 +62,7 @@ class DrivenReview:
         self.errors = {}
         self.feedback = ''
         self.verdict = None
+        self.closure = []
 
     def progress(self):
         return {key: getattr(self, key) for key in ('sections', 'errors', 'feedback')}
@@ -133,18 +134,32 @@ class DrivenReview:
             contract = ('SECTION: ' + section + '\n' + question +
                         '\nReply with only this section\'s text. No JSON, no envelope, no other sections. '
                         'For list sections, plain text becomes one list entry; an empty response means an empty list.')
+        if section == 'verdict' and self.closure:
+            context += '\nDISCREPANCY CLOSURE:\n' + canonical(self.closure)
+            contract += (' Alternatively reply with a JSON object containing verdict and discrepancy_resolutions: '
+                         'a list of {identity, disposition: STALE, note} for observations this later pass supersedes. '
+                         'Give a reason in each note. Silence leaves items open.')
         return ReviewPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 
     def accept(self, text):
         import json
         section = self.current
         if section == 'verdict':
-            lines = text.splitlines()
+            entries = []
+            try:
+                value = json.loads(text)
+            except ValueError:
+                value = None
+            if isinstance(value, dict):
+                entries = value.get('discrepancy_resolutions', [])
+                text = value.get('verdict', '')
+            lines = text.splitlines() if isinstance(text, str) else []
             if not lines or lines[0] not in ('APPROVE', 'REQUEST_CHANGES'):
                 raise PolicyError('unparseable_verdict: first line must be exactly APPROVE or REQUEST_CHANGES')
             self.verdict = lines[0]
             return {'action': 'finish', 'summary': 'Review of ' + repr(self.prior_stage) + ': ' + self.verdict,
-                    'open_discrepancies': self.sections['unresolved']}
+                    'open_discrepancies': self.sections['unresolved'],
+                    'discrepancy_resolutions': entries}
         value = text.strip()
         try:
             decoded = json.loads(value)

@@ -120,6 +120,8 @@ class Verifier:
             from .checks import KINDS, check
             if kind in KINDS:
                 return check(self, item)
+            if kind == 'discrepancy-live':
+                return 'unresolved discrepancy:' + item['identity'] + ': ' + item['text']
             if kind == 'obligation-discrepancy-free':
                 from .obligations import acknowledged_discrepancy
                 doc = self.json(item['path'])
