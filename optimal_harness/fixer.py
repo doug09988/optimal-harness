@@ -251,11 +251,26 @@ class DrivenFixer:
                     text = await ask(prompt, 4096)
                     lines = text.splitlines(keepends=True)
                     marker = lines[-1].strip() if lines else ''
-                    body = ''.join(lines[:-1])
+                    content = lines[:-1]
+                    oversized = len(content) > 60
+                    if oversized:
+                        # Mechanical repair: an otherwise-valid segment that
+                        # overruns the 60-line cap is truncated to the cap and
+                        # continued as MORE; the next segment prompt shows the
+                        # accepted prefix, so the model re-supplies the rest.
+                        # Downstream gates still verify the assembled file.
+                        content = content[:60]
+                    body = ''.join(content)
                     if (marker in ('<<<FIXER_MORE>>>', '<<<FIXER_DONE>>>') and
-                            1 <= len(lines) - 1 <= 60 and body.strip() and
+                            1 <= len(content) <= 60 and body.strip() and
                             '\x00' not in body and not body.lstrip().startswith(('```', '{"action"')) and
-                            not any('<<<FIXER_' in line for line in lines[:-1])):
+                            not any('<<<FIXER_' in line for line in content)):
+                        if oversized:
+                            marker = '<<<FIXER_MORE>>>'
+                            store.event('segment_repaired', dict(task=task['id'],
+                                        op='write_segment', path=path, segment=number,
+                                        repair_kind='oversized_segment_truncation',
+                                        original_lines=len(lines) - 1))
                         accepted.append(body)
                         break
                     error = 'Invalid segment: supply 1 to 60 plain content lines and the completion marker.'

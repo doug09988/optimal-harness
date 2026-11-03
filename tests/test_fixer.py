@@ -248,6 +248,27 @@ class FixerTests(unittest.TestCase):
                          [(True, False, False), (False, True, False),
                           (False, True, False), (False, False, True)])
 
+    def test_oversized_segment_is_truncated_and_continued(self):
+        self.setup_task()
+        (self.root/'wordfreq.py').write_text('# old\n' * 151)
+        oversized = '# line\n' * 70
+        rest = '# end\n' * 10
+        def continued(prompt):
+            self.assertIn('SEGMENT 2:', prompt)
+            self.assertIn('# line\n' * 60, prompt)
+            return rest + '<<<FIXER_DONE>>>'
+        task = self.attempt([oversized + '<<<FIXER_DONE>>>', continued, '# unit'])
+        self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])
+        body = (self.root/'wordfreq.py').read_text()
+        self.assertEqual(body, '# line\n' * 60 + rest)
+        compile(body, 'wordfreq.py', 'exec')
+        with self.store.transaction() as c:
+            events = [json.loads(r[0]) for r in c.execute(
+                "SELECT payload FROM events WHERE kind='segment_repaired'")]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['repair_kind'], 'oversized_segment_truncation')
+        self.assertEqual(events[0]['original_lines'], 70)
+
     def test_segment_assembly_rejected_with_existing_syntax_context(self):
         self.setup_task()
         (self.root/'wordfreq.py').write_text('# old\n' * 151)
