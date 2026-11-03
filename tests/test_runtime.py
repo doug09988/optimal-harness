@@ -1063,6 +1063,37 @@ class RuntimeTests(unittest.TestCase):
             self.engine.coordinator_verdict('wordcounter',True,'test only')
         self.assertEqual(self.store.project('wordcounter')['status'],'ESCALATED')
 
+    def test_coordinator_grade_applies_quarantine_accounting(self):
+        from unittest.mock import patch
+        from optimal_harness.verifier import LIFECYCLE
+        self.submit()
+        spec = (self.root/'spec.md').read_text()
+        slots = {}
+        for key, line in zip(LIFECYCLE, [ln for ln in spec.splitlines() if ':' in ln]):
+            slots[key] = {'status': 'citation', 'quote': line, 'because': 'Explicit lifecycle rule.'}
+        (self.root/'artifacts').mkdir(exist_ok=True)
+        (self.root/'artifacts/intake.json').write_text(json.dumps({'slots': slots}))
+        (self.root/'wordfreq.py').write_text('# implementation\n')
+        name = 'test_bad (test_unit.Tests)'
+        (self.root/'test_unit.py').write_text(
+            'import unittest\n\n\nclass Tests(unittest.TestCase):\n'
+            '    def test_bad(self):\n        self.assertTrue(False)\n')
+        (self.root/'test_acceptance.py').write_text('# acceptance\n')
+        text = ('='*70 + '\nFAIL: ' + name + '\n' + '-'*70 + '\nAssertionError: wrong\n' +
+                '-'*70 + '\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n')
+        (self.root/'reports').mkdir(exist_ok=True)
+        (self.root/'reports/integration.json').write_text(json.dumps(
+            {'exit_code': 1, 'reason': 'exited', 'stdout': '', 'stderr': text}))
+        (self.root/'reports/qa.json').write_text(json.dumps(
+            {'exit_code': 0, 'reason': 'exited', 'stdout': '', 'stderr': 'OK'}))
+        self.store.event('test_quarantined', dict(project='wordcounter', suite='reports/integration.json',
+                         test=name, clause='verbatim', derivation='test contradicts spec'))
+        self.store.project_status('wordcounter', 'AWAITING_COORDINATOR')
+        green = {'exit_code': 0, 'reason': 'exited', 'seconds': 0.01, 'stdout': 'mock green', 'stderr': ''}
+        with patch('optimal_harness.verifier.sandbox_command', return_value=green):
+            self.engine.coordinator_verdict('wordcounter', True, 'Coordinator graded independently; accepted.')
+        self.assertEqual(self.store.project('wordcounter')['status'], 'DONE')
+
     def test_fingerprint_ignores_ephemeral_paths_and_timings_not_assertions(self):
         root=Path('/example/work')
         a='independent acceptance failed: /example/work/.harness/commands/cmd-a/test.py\nAssertionError: 1 != 2\nRan 5 tests in 0.015s'

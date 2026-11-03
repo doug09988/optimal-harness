@@ -484,6 +484,11 @@ class Engine:
                 checks.append({"type": "command_receipt", "path": command["capture"]})
         verifier = Verifier(Path(p["root"]), private.parent)
         report = verifier.verify(checks)
+        # Same prospective quarantine accounting as the machine gate
+        # (_gate): a receipt whose only failures are quarantined tests
+        # passed the gate, so it must not fail the grade-time recheck.
+        from .adjudication import account
+        account(self, project, p["plan"], Path(p["root"]), checks, report)
         self._apply_obligations(report, project, p['plan'], Path(p['root']))
         report["receipt_pointers"] = self._record_verifier_receipts(project, Path(p["root"]), verifier.receipts)
         self.store.event("pre_grade_recheck", {"project": project, "report": report})
