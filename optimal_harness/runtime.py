@@ -605,7 +605,8 @@ async def run_task(engine, task):
                         planning = qa.current == 'plan'
                         action = qa.accept(result.text, spec=source_read(plan['spec']) if planning else '',
                             dropped=lambda entry: store.event('qa_test_dropped', entry),
-                            fallback=lambda entry: store.event('qa_plan_citation_fallback', entry))
+                            fallback=lambda entry: store.event('qa_plan_citation_fallback', entry),
+                            repaired=lambda entry: store.event('qa_body_repaired', entry))
                         if planning:
                             store.event('qa_test_citations', dict(project=task['project_id'], citations={
                                 name.strip(): clause.strip() for line in result.text.splitlines()

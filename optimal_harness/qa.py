@@ -73,7 +73,7 @@ class DrivenQA:
                         'Any other imports must be inside the function. Derive criteria from SPEC alone.')
         return QAPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 
-    def accept(self, text, spec='', dropped=None, fallback=None):
+    def accept(self, text, spec='', dropped=None, fallback=None, repaired=None):
         current = self.current
         if current == 'plan':
             lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -125,8 +125,53 @@ class DrivenQA:
                 raise PolicyError('invalid Python: ' + str(exc)) from exc
             if (len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef) or
                     tree.body[0].name != current):
-                raise PolicyError('reply must contain exactly the planned test function ' + current)
-            fn = tree.body[0]
+                # Mechanical repair: the model wrapped the planned test in a
+                # file/class envelope (imports + TestCase class). Extract the
+                # single FunctionDef with the planned name and hoist the
+                # top-level imports into its body; validation below is
+                # unchanged, and a wrong/absent name still fails.
+                candidates, imports = [], []
+                for node in tree.body:
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        imports.append(node)
+                    elif isinstance(node, ast.FunctionDef) and node.name == current:
+                        candidates.append(node)
+                    elif isinstance(node, ast.ClassDef):
+                        candidates.extend(sub for sub in node.body
+                                          if isinstance(sub, ast.FunctionDef)
+                                          and sub.name == current)
+                if len(candidates) != 1:
+                    raise PolicyError('reply must contain exactly the planned test function ' + current)
+                fn = candidates[0]
+                segment = ast.get_source_segment(code, fn)
+                if segment is None:
+                    raise PolicyError('reply must contain exactly the planned test function ' + current)
+                lines = textwrap.dedent(segment).splitlines()
+                if imports:
+                    if len(lines) < 2:
+                        raise PolicyError('reply must contain exactly the planned test function ' + current)
+                    insert_at = 1
+                    if (fn.body and isinstance(fn.body[0], ast.Expr) and
+                            isinstance(fn.body[0].value, ast.Constant) and
+                            isinstance(fn.body[0].value.value, str)):
+                        insert_at = 1 + (fn.body[0].end_lineno - fn.lineno)
+                    indent = '    '
+                    if insert_at < len(lines) and lines[insert_at].strip():
+                        stripped = lines[insert_at].lstrip()
+                        indent = lines[insert_at][:len(lines[insert_at]) - len(stripped)] or '    '
+                    hoisted = []
+                    for imp in imports:
+                        seg = ast.get_source_segment(code, imp)
+                        if seg is None:
+                            raise PolicyError('reply must contain exactly the planned test function ' + current)
+                        hoisted.extend(indent + line.strip()
+                                       for line in textwrap.dedent(seg).splitlines() if line.strip())
+                    lines = lines[:insert_at] + hoisted + lines[insert_at:]
+                code = '\n'.join(lines)
+                if repaired is not None:
+                    repaired({'name': current, 'repair_kind': 'qa_body_extraction'})
+            else:
+                fn = tree.body[0]
             args = fn.args
             if (fn.decorator_list or args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or
                     args.defaults or len(args.args) > 1 or (args.args and args.args[0].arg != 'self')):
