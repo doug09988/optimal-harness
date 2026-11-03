@@ -85,3 +85,15 @@ class ReviewVerdictTests(unittest.TestCase):
             review.accept(reply)
         self.assertEqual(review.current, 'verdict')
         self.assertEqual(review.completion_cap, 1024)
+
+
+class ReviewVerdictCapWithClosureTests(unittest.TestCase):
+    def test_verdict_cap_expands_only_with_closure(self):
+        from optimal_harness.review import DrivenReview
+        review = DrivenReview('QA')
+        for reply in ('QA', 'ATTEMPTED missing input', '', ''):
+            review.accept(reply)
+        self.assertEqual(review.current, 'verdict')
+        self.assertEqual(review.completion_cap, 1024)
+        review.closure = [{'identity': 'abc', 'text': 'superseded observation'}]
+        self.assertEqual(review.completion_cap, 4096)

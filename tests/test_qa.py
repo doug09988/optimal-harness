@@ -54,5 +54,26 @@ class TestQABodyExtraction(unittest.TestCase):
         self.assertIn('def test_one(self):', qa.assembly())
 
 
+class TestQABodyUnboundNames(unittest.TestCase):
+    def test_undefined_name_rejected_with_feedback(self):
+        qa = make_qa('test_one')
+        with self.assertRaisesRegex(PolicyError, 'TransferLog'):
+            qa.accept('def test_one(self):\n    tl = TransferLog("r", "p")\n    self.assertTrue(tl)')
+        self.assertEqual(qa.bodies, {})
+
+    def test_inside_import_accepted(self):
+        qa = make_qa('test_one')
+        qa.accept('def test_one(self):\n    from transfer_log import TransferLog\n'
+                  '    tl = TransferLog("r", "p")\n    self.assertTrue(tl)')
+        self.assertIn('from transfer_log import TransferLog', qa.bodies['test_one'])
+
+    def test_header_globals_and_locals_accepted(self):
+        qa = make_qa('test_one')
+        qa.accept('def test_one(self):\n    data = json.dumps({"a": 1})\n'
+                  '    with tempfile.NamedTemporaryFile() as f:\n'
+                  '        self.assertTrue(f.name)')
+        self.assertIn('def test_one(self):', qa.bodies['test_one'])
+
+
 if __name__ == '__main__':
     unittest.main()

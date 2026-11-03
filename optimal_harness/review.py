@@ -126,7 +126,12 @@ class DrivenReview:
 
     @property
     def completion_cap(self):
-        return 1024 if self.current == 'verdict' else 2048
+        if self.current == 'verdict':
+            # A discrepancy closure forces one resolution entry per item;
+            # at 1024 tokens a long closure truncates mid-JSON and the
+            # verdict is unparseable. Expand only when a closure exists.
+            return 4096 if self.closure else 1024
+        return 2048
 
     def section_sources(self, sources, artifact_paths):
         """Keep artifacts and their cited source spans, excluding unrelated inputs."""
@@ -183,7 +188,9 @@ class DrivenReview:
             context += '\nDISCREPANCY CLOSURE:\n' + canonical(self.closure)
             contract += (' discrepancy_resolutions is a list of {identity, disposition: STALE, note} '
                          'for observations this later pass supersedes. '
-                         'Give a reason in each note. Silence leaves items open.')
+                         'Give a reason in each note. Silence leaves items open. '
+                         'Emit at most one entry per distinct identity and keep each note '
+                         'to at most 25 words; never repeat an identity.')
         return ReviewPrompt(context + '\n' + contract + ('\nVALIDATOR REASON: ' + self.feedback if self.feedback else ''))
 
     def accept(self, text):

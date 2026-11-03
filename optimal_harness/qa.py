@@ -176,6 +176,35 @@ class DrivenQA:
             if (fn.decorator_list or args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or
                     args.defaults or len(args.args) > 1 or (args.args and args.args[0].arg != 'self')):
                 raise PolicyError('test must take only self or no arguments, without decorators')
+            # Mechanical unbound-name check: a body that loads a name it
+            # never binds (argument, assignment, import, builtin, or an
+            # assembly-header global) compiles but dies with NameError at
+            # execution, in a file no later stage may edit. Reject it here
+            # with the exact names so the tester imports them inside the
+            # function on the next attempt. Binding is over-approximated
+            # (any store anywhere counts) so defined names never reject.
+            import builtins
+            fn_node = ast.parse(code).body[0]
+            bound = set(dir(builtins)) | {'unittest', 'subprocess', 'sys', 'os',
+                                          'json', 'pathlib', 'tempfile', fn_node.name}
+            for node in ast.walk(fn_node):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    bound.add(node.id)
+                elif isinstance(node, ast.arg):
+                    bound.add(node.arg)
+                elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                    for alias in node.names:
+                        bound.add((alias.asname or alias.name).split('.')[0])
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    bound.add(node.name)
+                elif isinstance(node, ast.ExceptHandler) and node.name:
+                    bound.add(node.name)
+            unbound = sorted({node.id for node in ast.walk(fn_node)
+                              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)} - bound)
+            if unbound:
+                raise PolicyError('test body uses undefined name(s): ' + ', '.join(unbound) +
+                                  '; import each inside the function (from <module> import <name>) '
+                                  'or define it in the body')
             self.bodies[current] = ('@staticmethod\n' if not args.args else '') + code
         self.feedback = ''
         return None
