@@ -237,6 +237,19 @@ class CoderTests(unittest.TestCase):
         self.assertEqual(recorded, [{'task': task['id'], 'generation': 1,
                                     'repair_kind': 'run_on_segmentation'}])
 
+    def test_bare_separator_plan_repair_drops_degenerate_duplicates(self):
+        coder = DrivenCoder()
+        events = []
+        text = ('wordfreq.py :: implementation\n'
+                'test_unit.py :: tests\n'
+                'wordfreq.py::wordfreq.py\n'
+                'test_unit.py::test_unit.py')
+        coder.accept_plan(text, ['wordfreq.py', 'test_unit.py'],
+                          ['wordfreq.py', 'test_unit.py'], repaired=events.append)
+        self.assertEqual(coder.plan, {'wordfreq.py': 'implementation',
+                                      'test_unit.py': 'tests'})
+        self.assertEqual(events, [{'repair_kind': 'bare_separator_normalization'}])
+
     def test_strict_plan_does_not_disclose_repair(self):
         task = self.run_driven([self.file_plan, '# impl', '# tests', '[]'])
         self.assertEqual(task['status'], 'SUCCEEDED', task['failure'])

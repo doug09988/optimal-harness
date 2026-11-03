@@ -134,13 +134,25 @@ class DrivenCoder:
             repaired_drops = []
             try:
                 plan = strict(candidate, repaired_drops)
+                repair_kind = 'run_on_segmentation'
             except PolicyError:
-                if dropped is not None:
-                    for entry in drops:
-                        dropped(entry)
-                raise original
+                # Normalize line-initial bare separators (path::purpose) to
+                # the canonical spaced form. Degenerate repeated entries this
+                # creates are dropped by sanitize_plan as duplicates, exactly
+                # like repeated spaced entries; all other lines stay strict.
+                bare_candidate = re.sub(
+                    r'(?m)^([ \t]*\S+\.[A-Za-z][A-Za-z0-9]*)::(?=\S)',
+                    r'\1 :: ', candidate)
+                repaired_drops = []
+                try:
+                    plan = strict(bare_candidate, repaired_drops)
+                except PolicyError:
+                    if dropped is not None:
+                        for entry in drops:
+                            dropped(entry)
+                    raise original
+                repair_kind = 'bare_separator_normalization'
             drops = repaired_drops
-            repair_kind = 'run_on_segmentation'
         if dropped is not None:
             for entry in drops:
                 dropped(entry)
