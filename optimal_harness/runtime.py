@@ -13,7 +13,7 @@ from .store import canonical, LeaseLost
 from .handoff import ready_document, compose_handoff
 from .review import DrivenReview
 from .qa import DrivenQA
-from .coder import DrivenCoder
+from .coder import DrivenCoder, validate_body
 from .integrator import DrivenIntegrator
 from .fixer import DrivenFixer
 
@@ -562,6 +562,7 @@ async def run_task(engine, task):
                             body = result.text
                             if not body.strip() or '\x00' in body:
                                 raise PolicyError('file content must be nonempty text without NUL')
+                            validate_body(path, body)
                             chunks = storage_chunks(body)
                             count = write_checkpoint(path, body, chunks=chunks)
                             if len(chunks) > 1:

@@ -250,18 +250,23 @@ class DrivenFixer:
                             if state.get('feedback') else '')}, target=(path, current))
                     text = await ask(prompt, 4096)
                     lines = text.splitlines(keepends=True)
-                    marker = lines[-1].strip() if lines else ''
-                    content = lines[:-1]
+                    last = lines[-1].strip() if lines else ''
+                    has_marker = last in ('<<<FIXER_MORE>>>', '<<<FIXER_DONE>>>')
+                    marker = last if has_marker else ''
+                    content = lines[:-1] if has_marker else lines
                     oversized = len(content) > 60
+                    # Mechanical repair: a plain-content reply longer than the
+                    # segment cap whose completion marker never arrived (the
+                    # reply hit the completion cap mid-file) is truncated to
+                    # the cap and continued as MORE, exactly like an oversized
+                    # marked segment; the next segment prompt shows the
+                    # accepted prefix, so the model re-supplies the rest.
+                    # Downstream gates still verify the assembled file.
+                    missing_marker = not has_marker and oversized
                     if oversized:
-                        # Mechanical repair: an otherwise-valid segment that
-                        # overruns the 60-line cap is truncated to the cap and
-                        # continued as MORE; the next segment prompt shows the
-                        # accepted prefix, so the model re-supplies the rest.
-                        # Downstream gates still verify the assembled file.
                         content = content[:60]
                     body = ''.join(content)
-                    if (marker in ('<<<FIXER_MORE>>>', '<<<FIXER_DONE>>>') and
+                    if ((has_marker or missing_marker) and
                             1 <= len(content) <= 60 and body.strip() and
                             '\x00' not in body and not body.lstrip().startswith(('```', '{"action"')) and
                             not any('<<<FIXER_' in line for line in content)):
@@ -269,8 +274,11 @@ class DrivenFixer:
                             marker = '<<<FIXER_MORE>>>'
                             store.event('segment_repaired', dict(task=task['id'],
                                         op='write_segment', path=path, segment=number,
-                                        repair_kind='oversized_segment_truncation',
-                                        original_lines=len(lines) - 1))
+                                        repair_kind=('oversized_segment_truncation'
+                                                     if has_marker else
+                                                     'missing_marker_truncation'),
+                                        original_lines=(len(lines) - 1 if has_marker
+                                                        else len(lines))))
                         accepted.append(body)
                         break
                     error = 'Invalid segment: supply 1 to 60 plain content lines and the completion marker.'

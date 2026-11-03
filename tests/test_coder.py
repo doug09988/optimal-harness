@@ -3,7 +3,7 @@ import asyncio
 import json
 import unittest
 from unittest.mock import patch
-from optimal_harness.coder import DrivenCoder
+from optimal_harness.coder import DrivenCoder, validate_body
 from optimal_harness.policy import PolicyError
 from optimal_harness.engine import make_brief
 from optimal_harness.model import Completion
@@ -28,6 +28,15 @@ class CoderTests(unittest.TestCase):
 
     def handoff(self):
         return json.loads(next(self.root.glob('vault/runs/*/a1/handoff.json')).read_text())
+
+    def test_validate_body_rejects_overlong_test_file(self):
+        with self.assertRaises(PolicyError) as ctx:
+            validate_body('test_unit.py', '# line\n' * 151)
+        self.assertIn('151 lines', str(ctx.exception))
+        self.assertEqual(validate_body('test_unit.py', '# line\n' * 150),
+                         '# line\n' * 150)
+        self.assertEqual(validate_body('wordfreq.py', '# line\n' * 400),
+                         '# line\n' * 400)
 
     def test_exact_files_split_and_skip_disallowed(self):
         content = '#  "quote" \\path\n# ---CONTENT---\n# ☃\r\n' * 200
